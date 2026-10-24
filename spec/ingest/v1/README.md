@@ -87,8 +87,8 @@ Ogni record ha `id` (chiave sul dispositivo) e `h` (impronta). Tutti gli altri c
 dall'agente. Il server lo conserva cosi' com'e' e non lo ricalcola: serve solo a sapere se il record e' cambiato.
 Un agente MUST produrre lo stesso `h` per lo stesso contenuto tra un'esecuzione e l'altra.
 
-Le date sono stringhe grezze del dispositivo (es. `2026-09-19T15:05:59.819`, senza fuso orario dichiarato): il server
-le interpreta.
+Le date sono stringhe grezze del dispositivo, con o senza `Z` (es. `2026-09-19T15:05:59.819` o
+`2026-09-19T15:05:59Z`): sono tutte UTC (verificato sul dispositivo, sezione 10) e il server le interpreta come tali.
 
 ### 4.1 `annotations` (tabella `Bookmark`)
 
@@ -284,7 +284,29 @@ Limiti noti: un apostrofo iniziale si perde (`'tis` -> `tis`), come quello del g
 
 ## 10. Note da verificare sul dispositivo
 
-- Fuso orario delle date di `Bookmark` e `WordList`.
-- Formato di `ChapterIDBookmarked` e corrispondenza tra `Bookmark.ContentID` e le righe dei capitoli in `content`.
-- Valori reali di `Hidden` e di `Type` oltre a `highlight`, `note`, `dogear`.
+Osservato sul Clara BW, firmware 4.46.23836, primo sync reale del 24 ottobre 2026 (32 annotazioni, 62 parole, 2 libri;
+tutte le richieste valide per lo schema):
+
+- Date: `Bookmark.DateCreated` senza fuso e con millisecondi (`2026-10-24T08:00:00.123`), `Bookmark.DateModified` e
+  `WordList.DateCreated` con `Z` e senza millisecondi (`2026-10-24T08:00:00Z`). Per tutte le 32 annotazioni
+  `modified - created = 0`: le due forme usano lo stesso orologio. Confermato con l'ora reale di un'evidenziazione:
+  tutte le date sono UTC, anche quelle senza `Z`. Il server MUST interpretarle come UTC.
+- `ChapterIDBookmarked`: percorso nell'EPUB senza prefisso `file://`, nella forma `OEBPS/....html#point(/1/4/2/505:1)`.
+- `chapter_title` trovato per tutte le annotazioni, dogear compresi: la corrispondenza tra `Bookmark.ContentID` e le
+  righe dei capitoli in `content` funziona.
+- `Type`: solo `highlight` (22), `note` (2), `dogear` (8). `Hidden`: sempre falso. I dogear hanno `text` nullo e
+  `start_path` uguale a un `ContentID` (`file:///...epub#(n)...`), non un `point(...)`.
+- `WordList.VolumeId` puo' citare un libro assente da `content` (file rinominato: 3 parole su 62): il server deve
+  accettare parole senza libro.
+- `WordList` contiene solo le parole aggiunte con "Add to My Words", non tutte le ricerche nel dizionario.
+- Un'evidenziazione appena creata viene riscritta da Nickel poco dopo: `created` perde i millisecondi
+  (`.393` -> `.000`), `modified` passa da `null` alla data di creazione, `chapter_progress` viene arrotondato a 6
+  decimali. Lo stesso record arriva quindi due volte con `h` diverso; il server MUST trattarlo come un normale
+  aggiornamento e non come una modifica dell'utente.
+- Cancellare un'evidenziazione sul dispositivo elimina la riga di `Bookmark` (non imposta `Hidden`): l'id sparisce dal
+  manifest e il server la marca come cancellata.
+
+Ancora da verificare:
+
 - Se la stessa stringa cercata con due dizionari sovrascrive `DictSuffix` (`Text` e' chiave primaria di `WordList`).
+- Valori di `Hidden` e di `Type` diversi da quelli osservati (altri firmware, evidenziazioni nascoste).

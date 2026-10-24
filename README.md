@@ -24,7 +24,7 @@ valore della tabella `user`, degli id dell'account o del numero di serie compare
 
 | Dispositivo | Firmware | Stato |
 |---|---|---|
-| Kobo Clara BW (armv7l, kernel 4.9.77) | 4.46.23836 | v0.1 provata; **v0.2 da provare** ([KOBO-TEST.md](KOBO-TEST.md)) |
+| Kobo Clara BW (armv7l, kernel 4.9.77) | 4.46.23836 | v0.2 provata il 24 ottobre 2026 in rete locale (HTTP); HTTPS verso un dominio proprio da provare ([KOBO-TEST.md](KOBO-TEST.md)) |
 | Altri modelli o firmware | | non testati |
 
 Un aggiornamento del firmware potrebbe rimuovere la regola udev (non verificato): in quel caso l'agente smette di
@@ -56,26 +56,29 @@ regola inerte. Revocare il token dall'app impedisce comunque ogni invio.
 3. Attende la rotta controllando ogni 250 ms (massimo 45 s) e registra `route_ready_ms`.
 4. Copia stabile del database, `quick_check`, tre query sulla lista fissa di colonne.
 5. Invia solo i record con impronta cambiata rispetto all'ultima conferma del server, poi il manifest completo per le
-   cancellazioni; reinvia cio' che il server segnala come mancante. gzip, una sola connessione, riprovi con attese
-   di 1-16 s per circa 60 s al massimo. Si ferma su token revocato o contratto non piu' accettato finche' non
+   cancellazioni; reinvia cio' che il server segnala come mancante. gzip, una sola connessione, al massimo 6
+   tentativi con attese di 1-16 s (circa 30 s; fino a 60 s se il server chiede di attendere con `Retry-After`). Si ferma su token revocato o contratto non piu' accettato finche' non
    cambiano config o versione.
 6. Scrive `state.json` (conferme del server) e una riga di log con conteggi e tempi, mai testi.
 
 ## Prestazioni: misure e scelte
 
-Misure della v0.1 sul Clara BW reale; la v0.2 e' misurata in emulazione ARMv7 (Docker su Mac) e va rimisurata sul
-dispositivo.
+Misure sul Clara BW reale (v0.1 e v0.2, 12 esecuzioni della v0.2 il 24 ottobre 2026, server in rete locale).
 
-| Voce | v0.1 sul Kobo | v0.2 | Scelta |
+| Voce | v0.1 sul Kobo | v0.2 sul Kobo | Scelta |
 |---|---|---|---|
-| Durata di un'esecuzione | 21,2-21,7 s, di cui 20 s di debounce | 0,19 s in emulazione | debounce sostituito da blocco, salto dopo un sync recente e attesa della rotta: un sync riesce anche se il wifi resta acceso pochi secondi |
+| Durata di un'esecuzione | 21,2-21,7 s, di cui 20 s di debounce | 2,6-3,4 s, di cui 2,3-3,3 s di attesa della rotta | debounce sostituito da blocco, salto dopo un sync recente e attesa della rotta: un sync riesce anche se il wifi resta acceso pochi secondi |
+| Rotta pronta all'evento | non misurato | mai (12 su 12): pronta dopo 2,3-3,3 s | attesa della rotta ogni 250 ms, necessaria |
+| Eventi doppi al risveglio | uniti dal debounce | secondo evento 12-15 s dopo, saltato (`SKIP`) | salto se l'ultimo sync riuscito e' di meno di 30 s fa |
 | Sonde TLS di prova | 1,0-1,4 s | 0 | rimosse: il POST fa gia' l'handshake |
-| Handshake TLS | 0,7-1 s | da misurare | una sola connessione per tutti i lotti; nessuna ripresa di sessione tra esecuzioni (complessita' sproporzionata) |
-| Payload del primo sync (94 record) | solo conteggi | 3,4 KB compressi | gzip; i sync successivi senza cambiamenti inviano solo il manifest |
-| Copia del database | 4-14 ms | 2-3 ms in emulazione | nessuna |
-| Query e `quick_check` | 24-30 ms | 63-67 ms in emulazione | `quick_check` resta: una copia corrotta produrrebbe cancellazioni false |
+| Handshake TLS | 0,7-1 s | da misurare (serve il server pubblicato) | una sola connessione per tutti i lotti; nessuna ripresa di sessione tra esecuzioni (complessita' sproporzionata) |
+| Invio in rete locale | 21-137 ms | 46-175 ms | nessuna |
+| Byte inviati | solo conteggi | primo sync (96 record) 6,3 KB; senza cambiamenti 2,6 KB (solo manifest); ripristino dopo perdita dei dati del server 9,1 KB | gzip |
+| Copia del database | 4-14 ms | 3-14 ms, sempre al primo tentativo | nessuna |
+| Query e `quick_check` | 24-30 ms (solo conteggi) | 46-162 ms (testi, capitoli, libri) | nessuna: meno del 5% della durata, che e' dominata dalla rotta; `quick_check` resta, una copia corrotta produrrebbe cancellazioni false |
 | Dimensione del binario | 9,6 MB | 8,6 MB | tolti i simboli di debug del C rimasti nonostante `-s -w`; niente UPX ne' SQLite ridotto: guadagno piccolo, rischio alto |
-| Memoria | 5 MB (`mem_sys_mb`) | da misurare (nel log `END`) | nessuna |
+| Memoria (`mem_sys_mb`) | 5 MB | 5 MB; 9 MB con il ripristino completo in due giri | nessuna |
+| Server irraggiungibile | | 6 tentativi, `FAIL` dopo 29 s | nessuna |
 
 Complessita': lettura e confronto in O(n) con mappe, nessun ordinamento; il manifest completo a ogni sync costa circa
 6 KB con i dati attuali e circa 350 KB compressi a 10 000 record. Se la misura lo richiedera', la versione 1.1 del

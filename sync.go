@@ -77,7 +77,7 @@ func (s *sender) once(req *contract.Request) (*contract.Response, *failure) {
 	zw := gzip.NewWriter(&zb)
 	zw.Write(body)
 	zw.Close()
-	s.wire += zb.Len()
+	n := zb.Len()
 
 	hr, err := http.NewRequest(http.MethodPost, s.url, &zb)
 	if err != nil {
@@ -92,6 +92,7 @@ func (s *sender) once(req *contract.Request) (*contract.Response, *failure) {
 		return nil, &failure{Err: err}
 	}
 	defer res.Body.Close()
+	s.wire += n // solo se il server ha risposto: un tentativo con connessione rifiutata non invia nulla
 	rb, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 	if err != nil {
 		return nil, &failure{Err: err}

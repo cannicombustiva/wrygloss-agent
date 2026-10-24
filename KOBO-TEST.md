@@ -73,8 +73,8 @@ con tutti i record. `curl http://localhost:8765/status` deve mostrare gli stessi
 
 ## 7. Server irraggiungibile
 
-Fermare il devserver e riattivare il wifi. Atteso nel log del Kobo: righe `riprovo tra ...` e poi `FAIL sync`, in
-circa un minuto, senza che l'agente resti attivo oltre. Riavviare il devserver (come al passo 6) e riattivare il wifi:
+Fermare il devserver e riattivare il wifi. Atteso nel log del Kobo: cinque righe `riprovo tra ...` e poi `FAIL sync`,
+in circa 30 s, senza che l'agente resti attivo oltre. Riavviare il devserver (come al passo 6) e riattivare il wifi:
 il sync riprende.
 
 ## 8. Raccolta dei log
