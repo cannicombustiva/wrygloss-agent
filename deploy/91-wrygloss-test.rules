@@ -1,0 +1,3 @@
+# Wrygloss test: a ogni attivazione di wlan0 lancia lo script (che a sua volta avvia l'agente).
+# Se lo script o l'agente mancano la regola non fa nulla di dannoso.
+ACTION=="add", SUBSYSTEM=="net", KERNEL=="wlan0", RUN+="/bin/sh /mnt/onboard/.adds/wrygloss-test/run.sh"
