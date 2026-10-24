@@ -1,5 +1,5 @@
 #!/bin/sh
-# Crea build/KoboRoot.tgz con la sola regola udev (proprietario root, nessun file accessorio di macOS).
+# Create build/KoboRoot.tgz with just the udev rule (owned by root, no macOS metadata files).
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
 OUT="$HERE/../build/KoboRoot.tgz"

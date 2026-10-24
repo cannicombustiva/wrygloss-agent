@@ -1,19 +1,20 @@
 #!/bin/sh
-# Lanciato da udev a ogni attivazione di wlan0. Avvia l'agente in background e termina subito.
+# Started by udev on every wlan0 activation. Launches the agent in the background and exits immediately.
 D=/mnt/onboard/.adds/wrygloss
 RULE=/etc/udev/rules.d/91-wrygloss.rules
+LEGACY_RULE=/etc/udev/rules.d/91-wrygloss-test.rules # v0.1 test build
 BIN=/tmp/wrygloss-agent
 
-# Disinstallazione: un file vuoto UNINSTALL in .adds/wrygloss/ e una riattivazione del wifi rimuovono la regola.
+# Uninstall: an empty UNINSTALL file in .adds/wrygloss/ plus one wifi activation remove the rule.
 if [ -f "$D/UNINSTALL" ]; then
-  rm -f "$RULE" "$BIN" "$BIN.version"
-  echo "$(date '+%F %T') UNINSTALL: regola udev rimossa, ora si puo' cancellare la cartella .adds/wrygloss" >> "$D/agent.log"
+  rm -f "$RULE" "$LEGACY_RULE" "$BIN" "$BIN.version"
+  echo "$(date '+%F %T') UNINSTALL: udev rule removed, the .adds/wrygloss folder can now be deleted" >> "$D/agent.log"
   exit 0
 fi
 [ -f "$D/wrygloss-agent" ] || exit 0
 
-# Copia il binario in /tmp (RAM): la partizione utente e' FAT e non permette l'esecuzione.
-# Si ricopia quando cambia VERSION (versione piu' impronta del binario), una volta per avvio del dispositivo.
+# Copy the binary to /tmp (RAM): the user partition is FAT and does not allow execution.
+# It is copied again when VERSION (version plus binary fingerprint) changes, at most once per device boot.
 if [ ! -x "$BIN" ] || [ "$(cat "$D/VERSION" 2>/dev/null)" != "$(cat "$BIN.version" 2>/dev/null)" ]; then
   cp "$D/wrygloss-agent" "$BIN.$$" && chmod 755 "$BIN.$$" && mv "$BIN.$$" "$BIN" && cp "$D/VERSION" "$BIN.version"
 fi

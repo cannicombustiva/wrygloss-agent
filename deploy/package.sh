@@ -1,11 +1,11 @@
 #!/bin/sh
-# Crea build/wrygloss-agent-<versione>.zip con la stessa struttura della radice del Kobo:
-#   .adds/wrygloss/{wrygloss-agent,VERSION,run.sh}  e  .kobo/KoboRoot.tgz
-# Il config.json (server e token) non e' nel pacchetto: lo genera l'app per ogni dispositivo.
+# Create build/wrygloss-agent-<version>.zip with the same layout as the Kobo root:
+#   .adds/wrygloss/{wrygloss-agent,VERSION,run.sh}  and  .kobo/KoboRoot.tgz
+# config.json (server and token) is not in the package: the app generates it for each device.
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
 B="$HERE/../build"
-[ -f "$B/wrygloss-agent" ] && [ -f "$B/VERSION" ] || { echo "manca build/wrygloss-agent: esegui ./build.sh"; exit 1; }
+[ -f "$B/wrygloss-agent" ] && [ -f "$B/VERSION" ] || { echo "build/wrygloss-agent is missing: run ./build.sh"; exit 1; }
 sh "$HERE/make_koboroot.sh" >/dev/null
 V="$(cut -d' ' -f1 "$B/VERSION")"
 STAGE="$(mktemp -d)"

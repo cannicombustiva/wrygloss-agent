@@ -1,5 +1,5 @@
-// Package spec incorpora gli schemi e gli esempi del contratto, per i test e per il server di riferimento.
-// L'agente non lo importa: gli schemi non finiscono nel binario per il dispositivo.
+// Package spec embeds the contract's schemas and examples, for the tests and the reference server.
+// The agent does not import it: the schemas do not end up in the device binary.
 package spec
 
 import "embed"

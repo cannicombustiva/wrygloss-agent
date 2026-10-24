@@ -13,7 +13,7 @@ import (
 	"github.com/cannicombustiva/wrygloss-agent/internal/contract"
 )
 
-// failure e' un esito non 200: Status 0 indica un errore di rete.
+// failure is a non-200 outcome: Status 0 means a network error.
 type failure struct {
 	Status     int
 	Code       string
@@ -23,7 +23,7 @@ type failure struct {
 
 func (f *failure) Error() string {
 	if f.Status == 0 {
-		return fmt.Sprintf("rete: %v", f.Err)
+		return fmt.Sprintf("network: %v", f.Err)
 	}
 	return fmt.Sprintf("status=%d code=%s", f.Status, f.Code)
 }
@@ -41,11 +41,11 @@ type sender struct {
 	now      func() time.Time
 	sleep    func(time.Duration)
 	jitter   func(time.Duration) time.Duration
-	deadline time.Time // oltre questo istante non si riprova piu'
-	wire     int       // byte inviati (compressi)
+	deadline time.Time // no more retries past this instant
+	wire     int       // bytes sent (compressed)
 }
 
-// post invia una richiesta, riprovando con attese crescenti su errori di rete, 5xx e 429 (spec 6.3).
+// post sends a request, retrying with growing waits on network errors, 5xx and 429 (spec 6.3).
 func (s *sender) post(req *contract.Request) (*contract.Response, error) {
 	for attempt := 1; ; attempt++ {
 		req.Run.Attempt = attempt
@@ -63,7 +63,7 @@ func (s *sender) post(req *contract.Request) (*contract.Response, error) {
 		if s.now().Add(wait).After(s.deadline) {
 			return nil, f
 		}
-		logf("riprovo tra %dms (%v)", wait.Milliseconds(), f)
+		logf("retrying in %dms (%v)", wait.Milliseconds(), f)
 		s.sleep(wait)
 	}
 }
@@ -92,13 +92,13 @@ func (s *sender) once(req *contract.Request) (*contract.Response, *failure) {
 		return nil, &failure{Err: err}
 	}
 	defer res.Body.Close()
-	s.wire += n // solo se il server ha risposto: un tentativo con connessione rifiutata non invia nulla
+	s.wire += n // only if the server answered: an attempt with a refused connection sends nothing
 	rb, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 	if err != nil {
 		return nil, &failure{Err: err}
 	}
 	if res.StatusCode == http.StatusOK {
-		var out contract.Response // campi sconosciuti ignorati: l'agente e' tollerante (spec 1.4)
+		var out contract.Response // unknown fields ignored: the agent is tolerant (spec 1.4)
 		if err := json.Unmarshal(rb, &out); err != nil {
 			return nil, &failure{Status: res.StatusCode, Code: "bad_response", Err: err}
 		}
@@ -124,8 +124,8 @@ type budget struct{ records, bytes int }
 
 var defaultBudget = budget{records: contract.MaxUpserts, bytes: 2 << 20}
 
-// makeBatches divide le voci in lotti entro il budget. L'ultimo lotto porta il manifest: se non ci sta, si aggiunge
-// un lotto finale vuoto. C'e' sempre almeno un lotto, anche senza voci, per inviare il manifest.
+// makeBatches splits the entries into batches within the budget. The last batch carries the manifest: if it does not
+// fit, an empty final batch is added. There is always at least one batch, even without entries, to send the manifest.
 func makeBatches(entries []entry, b budget, manifestBytes int) [][]entry {
 	var out [][]entry
 	var cur []entry
@@ -151,12 +151,12 @@ type syncResult struct {
 	Rejected int
 	Batches  int
 	Rounds   int
-	Missing  int // record ancora mancanti dopo l'ultimo giro
+	Missing  int // records still missing after the last round
 	Resp     *contract.Response
 }
 
-// syncSnapshot invia i record cambiati rispetto allo stato confermato, poi il manifest; se il server segnala
-// record mancanti li reinvia, al massimo per 2 giri in piu' (spec 5.1). Aggiorna st.Acked dopo ogni 200.
+// syncSnapshot sends the records that changed since the acked state, then the manifest; if the server reports
+// missing records it resends them, for at most 2 extra rounds (spec 5.1). It updates st.Acked after every 200.
 func syncSnapshot(s *sender, base contract.Request, snap *snapshot, st *state) (*syncResult, error) {
 	res := &syncResult{Sent: map[contract.Kind]int{}, Deleted: map[contract.Kind]int{}}
 	manifest := contract.Manifest{}
@@ -203,7 +203,7 @@ func syncSnapshot(s *sender, base contract.Request, snap *snapshot, st *state) (
 			}
 			resp, err := s.post(&req)
 			if f, ok := err.(*failure); ok && f.Status == http.StatusRequestEntityTooLarge && !shrunk {
-				// Una sola riduzione: lotti a un quarto, ripartendo da questo lotto.
+				// A single shrink: batches at a quarter, restarting from this batch.
 				shrunk = true
 				b = budget{records: max(1, b.records/4), bytes: max(1, b.bytes/4)}
 				var rest []entry

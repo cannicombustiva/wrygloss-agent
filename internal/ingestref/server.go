@@ -1,6 +1,6 @@
-// Package ingestref e' un'implementazione di riferimento, in memoria, del server di ingest v1.
-// Serve ai test dell'agente e a cmd/devserver per le prove in rete locale. Non e' il server di produzione:
-// non pulisce le parole e non conosce account. Valida le richieste contro il JSON Schema della specifica.
+// Package ingestref is an in-memory reference implementation of the ingest v1 server.
+// It backs the agent tests and cmd/devserver for local network tests. It is not the production server: the Server
+// does not clean words and knows no accounts. It validates requests against the spec's JSON Schema.
 package ingestref
 
 import (
@@ -25,7 +25,7 @@ import (
 
 type Record struct {
 	H        string
-	Raw      json.RawMessage // nil se rifiutato
+	Raw      json.RawMessage // nil if rejected
 	Deleted  bool
 	Rejected string
 }
@@ -33,13 +33,13 @@ type Record struct {
 type Device struct {
 	Revoked  bool
 	Records  map[contract.Kind]map[string]*Record
-	Requests []contract.Request // richieste accettate (200), per i test
+	Requests []contract.Request // accepted requests (200), for tests
 
 	tokens     float64
 	lastRefill time.Time
 }
 
-// Live conta i record non cancellati di un tipo.
+// Live counts the non-deleted records of a kind.
 func (d *Device) Live(k contract.Kind) int {
 	n := 0
 	for _, r := range d.Records[k] {
@@ -56,11 +56,11 @@ type Server struct {
 	MinIntervalS int
 	RatePerHour  float64
 	Burst        float64
-	// Log, se impostato, riceve una riga per richiesta.
+	// Log, if set, receives one line per request.
 	Log func(format string, a ...any)
 
 	mu        sync.Mutex
-	devices   map[string]*Device // per SHA-256 del token
+	devices   map[string]*Device // by SHA-256 of the token
 	validator *Validator
 }
 
@@ -83,7 +83,7 @@ func tokenHash(t string) string {
 	return hex.EncodeToString(s[:])
 }
 
-// AddDevice registra un dispositivo con il suo token (il server conserva solo l'impronta).
+// AddDevice registers a device with its token (the server keeps only the hash).
 func (s *Server) AddDevice(token string) *Device {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -100,7 +100,7 @@ func (s *Server) AddDevice(token string) *Device {
 var minorRe = regexp.MustCompile(`^1\.[0-9]+$`)
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	s.mu.Lock() // serializza le richieste (sezione 5.3); in memoria basta un solo lock
+	s.mu.Lock() // serializes requests (section 5.3); in memory a single lock is enough
 	defer s.mu.Unlock()
 	status, body := s.handle(r)
 	w.Header().Set("Content-Type", "application/json")
@@ -169,7 +169,7 @@ func (s *Server) handle(r *http.Request) (int, any) {
 	}
 	if n := len(req.Upserts.Annotations) + len(req.Upserts.Words) + len(req.Upserts.Books); n > contract.MaxUpserts {
 		return problem(http.StatusUnprocessableEntity, contract.CodeSchemaViolation, "",
-			contract.FieldError{Pointer: "/upserts", Message: fmt.Sprintf("%d record, massimo %d", n, contract.MaxUpserts)})
+			contract.FieldError{Pointer: "/upserts", Message: fmt.Sprintf("%d records, maximum %d", n, contract.MaxUpserts)})
 	}
 
 	resp := s.apply(d, &req)
@@ -190,7 +190,7 @@ func ptrStr(p *int64) string {
 	return fmt.Sprint(*p)
 }
 
-// readBody applica i limiti sul filo e decompressi (sezione 7).
+// readBody enforces the wire and decompressed limits (section 7).
 func readBody(r *http.Request) ([]byte, int, string) {
 	wire := io.LimitReader(r.Body, contract.MaxWireBytes+1)
 	var src io.Reader = wire
@@ -242,7 +242,7 @@ func (s *Server) allow(d *Device) bool {
 	return true
 }
 
-// apply applica upserts e, nel lotto finale, il manifest (sezioni 5.2 e 6.2).
+// apply applies the upserts and, in the final batch, the manifest (sections 5.2 and 6.2).
 func (s *Server) apply(d *Device, req *contract.Request) *contract.Response {
 	resp := &contract.Response{
 		Schema:       contract.Schema,
@@ -293,7 +293,7 @@ func (s *Server) apply(d *Device, req *contract.Request) *contract.Response {
 	return resp
 }
 
-// checkRecord estrae id e h e controlla i limiti di valore. La struttura e' gia' stata validata dallo schema.
+// checkRecord extracts id and h and checks the value limits. The structure was already validated by the schema.
 func checkRecord(raw json.RawMessage) (id, h, code, pointer string) {
 	var m map[string]any
 	if err := json.Unmarshal(raw, &m); err != nil {

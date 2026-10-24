@@ -1,6 +1,6 @@
--- Database sintetico con lo schema reale del Kobo (sottoinsieme) e i conteggi del test del 24 ottobre:
--- 22 evidenziazioni, 2 note, 8 dogear, 62 parole. I valori CANARY_* non devono MAI comparire in un payload o in un log.
--- Usato da tools/make_test_db.py e dai test Go.
+-- Synthetic database with the real Kobo schema (subset) and the counts of the October 24 test:
+-- 22 highlights, 2 notes, 8 dogears, 62 words. CANARY_* values must NEVER appear in a payload or a log.
+-- Used by tools/make_test_db.py and the Go tests. The notes are in Italian on purpose, like the user's own notes.
 CREATE TABLE Bookmark ( BookmarkID TEXT NOT NULL, VolumeID TEXT NOT NULL, ContentID TEXT NOT NULL, StartContainerPath TEXT NOT NULL, StartContainerChildIndex INTEGER NOT NULL, StartOffset INTEGER NOT NULL, EndContainerPath TEXT NOT NULL, EndContainerChildIndex INTEGER NOT NULL, EndOffset INTEGER NOT NULL, Text TEXT, Annotation TEXT, ExtraAnnotationData BLOB, DateCreated TEXT, ChapterProgress REAL NOT NULL DEFAULT 0, Hidden BOOL NOT NULL DEFAULT 0, Version TEXT, DateModified TEXT, Creator TEXT, UUID TEXT, UserID TEXT, SyncTime TEXT, Published BIT default false, ContextString TEXT, Type TEXT, Color INTEGER DEFAULT 0, PRIMARY KEY (BookmarkID) );
 CREATE INDEX bookmark_content ON Bookmark (ContentID);
 CREATE INDEX bookmark_volume ON Bookmark (VolumeID);
@@ -35,7 +35,7 @@ INSERT INTO Bookmark (BookmarkID, VolumeID, ContentID, StartContainerPath, Start
 SELECT 'd' || i, 'file:///mnt/onboard/Books/Novel.epub', 'file:///mnt/onboard/Books/Novel.epub#(3)OEBPS/ch3.xhtml', 'OEBPS/ch3.xhtml#point(/1/2/' || i || ':0)', 0, 0, 'OEBPS/ch3.xhtml#point(/1/2/' || i || ':0)', 0, 0, '2026-09-21T10:00:00.000', 'CANARY_BOOKMARK_USERID', 'dogear'
 FROM n;
 
--- 62 parole: 59 generate, piu' tre forme della stessa parola (unione lato server) e una con dizionario es-en.
+-- 62 words: 59 generated, plus two forms of the same word (merged server-side) and one with the es-en dictionary.
 WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 58)
 INSERT INTO WordList SELECT CASE WHEN i % 5 = 0 THEN 'word' || i || ',' ELSE 'word' || i END, 'file:///mnt/onboard/Books/Novel.epub', '-en', '2026-10-01T00:00:00Z' FROM n;
 INSERT INTO WordList VALUES ('snazzy,', 'file:///mnt/onboard/Books/Novel.epub', '-en', '2026-10-02T08:00:00Z');

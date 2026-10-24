@@ -51,7 +51,7 @@ func TestErrorCodes(t *testing.T) {
 	valid := example(t, "valid/full-sync.json")
 	var zipped bytes.Buffer
 	zw := gzip.NewWriter(&zipped)
-	zw.Write([]byte(`{"pad":"` + strings.Repeat("a", contract.MaxBodyBytes) + `"}`)) // decompresso oltre 8 MiB
+	zw.Write([]byte(`{"pad":"` + strings.Repeat("a", contract.MaxBodyBytes) + `"}`)) // over 8 MiB decompressed
 	zw.Close()
 
 	cases := []struct {
@@ -61,29 +61,29 @@ func TestErrorCodes(t *testing.T) {
 		status int
 		code   string
 	}{
-		{"token sconosciuto", valid, map[string]string{"Authorization": "Bearer wgd_nope"}, 401, contract.CodeInvalidToken},
+		{"unknown token", valid, map[string]string{"Authorization": "Bearer wgd_nope"}, 401, contract.CodeInvalidToken},
 		{"content-type", valid, map[string]string{"Content-Type": "text/plain"}, 415, contract.CodeUnsupportedMedia},
 		{"encoding", valid, map[string]string{"Content-Encoding": "br"}, 415, contract.CodeUnsupportedMedia},
-		{"gzip non valido", valid, map[string]string{"Content-Encoding": "gzip"}, 400, contract.CodeBadEncoding},
+		{"invalid gzip", valid, map[string]string{"Content-Encoding": "gzip"}, 400, contract.CodeBadEncoding},
 		{"gzip bomb", zipped.Bytes(), map[string]string{"Content-Encoding": "gzip"}, 413, contract.CodePayloadTooLarge},
-		{"oltre 1 MiB sul filo", bytes.Repeat([]byte(" "), contract.MaxWireBytes+1), nil, 413, contract.CodePayloadTooLarge},
-		{"non JSON", []byte("{"), nil, 400, contract.CodeMalformedJSON},
-		{"minore sconosciuta", example(t, "invalid/unknown-minor-version.json"), nil, 410, contract.CodeSchemaUnsupported},
-		{"campo sconosciuto", example(t, "invalid/unknown-record-field.json"), nil, 422, contract.CodeSchemaViolation},
-		{"dati user", example(t, "invalid/user-data-top-level.json"), nil, 422, contract.CodeSchemaViolation},
+		{"over 1 MiB on the wire", bytes.Repeat([]byte(" "), contract.MaxWireBytes+1), nil, 413, contract.CodePayloadTooLarge},
+		{"not JSON", []byte("{"), nil, 400, contract.CodeMalformedJSON},
+		{"unknown minor", example(t, "invalid/unknown-minor-version.json"), nil, 410, contract.CodeSchemaUnsupported},
+		{"unknown field", example(t, "invalid/unknown-record-field.json"), nil, 422, contract.CodeSchemaViolation},
+		{"user data", example(t, "invalid/user-data-top-level.json"), nil, 422, contract.CodeSchemaViolation},
 	}
 	for _, c := range cases {
 		s, _ := newTestServer(t)
 		status, out := post(t, s, c.body, c.hdr)
 		if status != c.status || out["code"] != c.code {
-			t.Errorf("%s: status=%d code=%v, attesi %d %s", c.name, status, out["code"], c.status, c.code)
+			t.Errorf("%s: status=%d code=%v, want %d %s", c.name, status, out["code"], c.status, c.code)
 		}
 	}
 
 	s, d := newTestServer(t)
 	d.Revoked = true
 	if status, out := post(t, s, valid, nil); status != 401 || out["code"] != contract.CodeTokenRevoked {
-		t.Errorf("revocato: %d %v", status, out["code"])
+		t.Errorf("revoked: %d %v", status, out["code"])
 	}
 }
 
@@ -100,19 +100,19 @@ func TestRateLimit(t *testing.T) {
 	s, _ := newTestServer(t)
 	now := time.Date(2026, 10, 24, 0, 0, 0, 0, time.UTC)
 	s.Now = func() time.Time { return now }
-	s.AddDevice(tok) // ricrea il secchio con l'orologio finto
+	s.AddDevice(tok) // recreate the bucket with the fake clock
 	body := example(t, "valid/no-changes.json")
 	for i := 0; i < 10; i++ {
 		if status, _ := post(t, s, body, nil); status != 200 {
-			t.Fatalf("richiesta %d: %d", i, status)
+			t.Fatalf("request %d: %d", i, status)
 		}
 	}
 	if status, out := post(t, s, body, nil); status != 429 || out["code"] != contract.CodeRateLimited {
-		t.Fatalf("11a richiesta: %d %v", status, out["code"])
+		t.Fatalf("11th request: %d %v", status, out["code"])
 	}
-	now = now.Add(time.Minute) // 60 all'ora: un gettone al minuto
+	now = now.Add(time.Minute) // 60 per hour: one token per minute
 	if status, _ := post(t, s, body, nil); status != 200 {
-		t.Fatalf("dopo un minuto: %d", status)
+		t.Fatalf("after one minute: %d", status)
 	}
 }
 
@@ -131,15 +131,15 @@ func TestRecordLevelRejection(t *testing.T) {
 	if len(rej) != 1 || rej[0].(map[string]any)["code"] != "field_too_long" {
 		t.Fatalf("rejected=%v", rej)
 	}
-	// Il record rifiutato e' noto con il suo h: non torna in missing.
+	// The rejected record is known by its h: it does not come back in missing.
 	missing := out["missing"].(map[string]any)["annotations"].([]any)
 	for _, m := range missing {
 		if m == ann["id"] {
-			t.Fatal("record rifiutato richiesto di nuovo in missing")
+			t.Fatal("rejected record requested again in missing")
 		}
 	}
 	if d.Records[contract.Annotations][ann["id"].(string)].Raw != nil {
-		t.Fatal("contenuto del record rifiutato salvato")
+		t.Fatal("content of the rejected record was stored")
 	}
 }
 

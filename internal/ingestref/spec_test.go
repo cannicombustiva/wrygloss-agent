@@ -17,16 +17,16 @@ func TestExamplesAgainstSchema(t *testing.T) {
 	for _, dir := range []string{"valid", "invalid"} {
 		files, _ := fs.Glob(spec.FS, "ingest/v1/examples/"+dir+"/*.json")
 		if len(files) == 0 {
-			t.Fatalf("nessun esempio in %s", dir)
+			t.Fatalf("no examples in %s", dir)
 		}
 		for _, f := range files {
 			b, _ := spec.FS.ReadFile(f)
 			errs := v.Validate(b)
 			if dir == "valid" && errs != nil {
-				t.Errorf("%s dovrebbe essere valido: %v", path.Base(f), errs)
+				t.Errorf("%s should be valid: %v", path.Base(f), errs)
 			}
 			if dir == "invalid" && errs == nil {
-				t.Errorf("%s dovrebbe essere non valido", path.Base(f))
+				t.Errorf("%s should be invalid", path.Base(f))
 			}
 		}
 	}
@@ -46,7 +46,7 @@ func TestWordCleaningVectors(t *testing.T) {
 	for _, c := range doc.Cases {
 		clean, key := CleanWord(c.Raw)
 		if clean != c.Clean || key != c.Key {
-			t.Errorf("CleanWord(%q) = %q, %q; attesi %q, %q", c.Raw, clean, key, c.Clean, c.Key)
+			t.Errorf("CleanWord(%q) = %q, %q; want %q, %q", c.Raw, clean, key, c.Clean, c.Key)
 		}
 	}
 }

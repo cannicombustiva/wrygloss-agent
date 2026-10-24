@@ -10,10 +10,10 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-// Validator valida documenti JSON contro uno degli schemi della specifica.
+// Validator validates JSON documents against one of the spec's schemas.
 type Validator struct{ schema *jsonschema.Schema }
 
-// NewValidator compila lo schema indicato per nome di file, es. "sync-request.schema.json".
+// NewValidator compiles the schema named by file name, e.g. "sync-request.schema.json".
 func NewValidator(name string) (*Validator, error) {
 	b, err := spec.FS.ReadFile("ingest/v1/" + name)
 	if err != nil {
@@ -34,7 +34,7 @@ func NewValidator(name string) (*Validator, error) {
 	return &Validator{schema: s}, nil
 }
 
-// Validate restituisce nil se il documento e' conforme, altrimenti gli errori foglia con il loro JSON Pointer.
+// Validate returns nil if the document conforms, otherwise the leaf errors with their JSON Pointer.
 func (v *Validator) Validate(raw []byte) []contract.FieldError {
 	inst, err := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
 	if err != nil {

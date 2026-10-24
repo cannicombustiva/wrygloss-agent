@@ -1,5 +1,5 @@
 {
-  "description": "Vettori per la sezione 9 della specifica. 'clean' e 'key' attesi per ogni 'raw'; clean vuoto = unusable.",
+  "description": "Vectors for section 9 of the spec. Expected 'clean' and 'key' for each 'raw'; empty clean = unusable.",
   "cases": [
     { "raw": "snazzy,", "clean": "snazzy", "key": "snazzy" },
     { "raw": "Snazzy", "clean": "Snazzy", "key": "snazzy" },

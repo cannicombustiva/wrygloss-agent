@@ -1,6 +1,6 @@
-// Package contract contiene i tipi del contratto wrygloss.ingest v1 (vedi spec/ingest/v1/README.md).
-// I record viaggiano come json.RawMessage: l'agente li serializza una sola volta (per l'impronta e per l'invio),
-// il server li decodifica record per record per poter rifiutare il singolo record e non la richiesta.
+// Package contract holds the types of the wrygloss.ingest v1 contract (see spec/ingest/v1/README.md).
+// Records travel as json.RawMessage: the agent serializes them once (for the fingerprint and for sending), the
+// server decodes them record by record so it can reject a single record rather than the whole request.
 package contract
 
 import "encoding/json"
@@ -20,7 +20,7 @@ const (
 
 var Kinds = []Kind{Annotations, Words, Books}
 
-// Limiti della sezione 7.
+// Limits from section 7.
 const (
 	MaxWireBytes       = 1 << 20
 	MaxBodyBytes       = 8 << 20
@@ -62,7 +62,7 @@ type Upserts struct {
 	Books       []json.RawMessage `json:"books"`
 }
 
-// Of restituisce l'array del tipo indicato.
+// Of returns the array for the given kind.
 func (u *Upserts) Of(k Kind) *[]json.RawMessage {
 	switch k {
 	case Annotations:
@@ -74,7 +74,7 @@ func (u *Upserts) Of(k Kind) *[]json.RawMessage {
 	}
 }
 
-// Manifest: per ogni tipo presente, id -> h di tutti i record sul dispositivo. Un tipo assente non viene toccato.
+// Manifest: for each kind present, id -> h of every record on the device. An absent kind is left untouched.
 type Manifest map[Kind]map[string]string
 
 type Annotation struct {
@@ -143,7 +143,7 @@ type FieldError struct {
 	Message string `json:"message"`
 }
 
-// Codici di errore stabili (sezione 6.3).
+// Stable error codes (section 6.3).
 const (
 	CodeMalformedJSON     = "malformed_json"
 	CodeBadEncoding       = "bad_encoding"

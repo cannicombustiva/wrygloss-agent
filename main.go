@@ -1,6 +1,6 @@
-// Wrygloss agent v0.2: a ogni attivazione del wifi legge da una copia di KoboReader.sqlite una lista fissa di
-// colonne (evidenziazioni, note, dogear, parole cercate, libri citati) e le sincronizza con il server di Wrygloss
-// secondo il contratto in spec/ingest/v1. Non legge mai la tabella user ne' gli id dell'account.
+// Wrygloss agent v0.2: on every wifi activation it reads a fixed list of columns (highlights, notes, dogears, saved
+// words, cited books) from a copy of KoboReader.sqlite and syncs them with the Wrygloss server according to the
+// contract in spec/ingest/v1. It never reads the user table or the account ids.
 package main
 
 import (
@@ -31,8 +31,8 @@ var caPEM []byte
 
 const version = "0.2.0"
 
-// recentSkip: un secondo evento wifi entro questo tempo da un sync riuscito non rifa' il lavoro (eventi doppi
-// a 11-16 s l'uno dall'altro, misurati sul Clara BW). Il server puo' alzarlo con min_interval_s.
+// recentSkip: a second wifi event within this time of a successful sync does not redo the work (double events
+// 11-16 s apart, measured on the Clara BW). The server can raise it with min_interval_s.
 const recentSkip = 30 * time.Second
 
 type Config struct {
@@ -40,9 +40,9 @@ type Config struct {
 	Token     string `json:"token"`
 }
 
-// env raccoglie tutto cio' che dipende dal dispositivo, per poter provare run() su un computer qualsiasi.
+// env gathers everything that depends on the device, so run() can be tested on any computer.
 type env struct {
-	dir         string // config, stato, log
+	dir         string // config, state, log
 	dbPath      string
 	versionPath string
 	routePath   string
@@ -52,7 +52,7 @@ type env struct {
 	retryBudget time.Duration
 	now         func() time.Time
 	sleep       func(time.Duration)
-	transport   http.RoundTripper // nil: transport con radici incorporate
+	transport   http.RoundTripper // nil: transport with embedded roots
 }
 
 var (
@@ -85,11 +85,11 @@ func main() {
 		now:         time.Now,
 		sleep:       time.Sleep,
 	}
-	flag.StringVar(&e.dir, "dir", "/mnt/onboard/.adds/wrygloss", "cartella di lavoro (config, stato, log)")
-	flag.StringVar(&e.dbPath, "db", "/mnt/onboard/.kobo/KoboReader.sqlite", "database del dispositivo")
-	flag.StringVar(&e.routePath, "route-file", e.routePath, "tabella delle rotte (per i test)")
-	flag.StringVar(&e.tmpDir, "tmp", e.tmpDir, "cartella per la copia del database e il blocco")
-	showVersion := flag.Bool("version", false, "stampa la versione ed esce")
+	flag.StringVar(&e.dir, "dir", "/mnt/onboard/.adds/wrygloss", "working directory (config, state, log)")
+	flag.StringVar(&e.dbPath, "db", "/mnt/onboard/.kobo/KoboReader.sqlite", "device database")
+	flag.StringVar(&e.routePath, "route-file", e.routePath, "routing table (for tests)")
+	flag.StringVar(&e.tmpDir, "tmp", e.tmpDir, "directory for the database copy and the lock")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println(version)
@@ -112,25 +112,25 @@ func loadConfig(dir string) (Config, error) {
 	}
 	var keys map[string]any
 	if err := json.Unmarshal(b, &keys); err != nil {
-		return cfg, fmt.Errorf("JSON non valido: %w", err)
+		return cfg, fmt.Errorf("invalid JSON: %w", err)
 	}
 	for k := range keys {
 		if k != "server_url" && k != "token" {
-			logf("config: chiave sconosciuta %q ignorata", k)
+			logf("config: unknown key %q ignored", k)
 		}
 	}
 	if err := json.Unmarshal(b, &cfg); err != nil {
-		return cfg, fmt.Errorf("JSON non valido: %w", err)
+		return cfg, fmt.Errorf("invalid JSON: %w", err)
 	}
 	u, err := url.Parse(cfg.ServerURL)
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
-		return cfg, fmt.Errorf("server_url non valido")
+		return cfg, fmt.Errorf("invalid server_url")
 	}
 	if u.Scheme == "http" {
-		logf("config: server_url senza HTTPS (solo per prove in rete locale)")
+		logf("config: server_url without HTTPS (local network tests only)")
 	}
 	if cfg.Token == "" {
-		return cfg, fmt.Errorf("token mancante")
+		return cfg, fmt.Errorf("missing token")
 	}
 	return cfg, nil
 }
@@ -155,10 +155,10 @@ func newRunID(t time.Time) string {
 	return "r-" + t.UTC().Format("20060102T150405Z") + "-" + hex.EncodeToString(b)
 }
 
-// run esegue un sync completo e restituisce true se riuscito o saltato per un motivo normale.
+// run performs a full sync and returns true if it succeeded or was skipped for a normal reason.
 func run(e env) bool {
 	start := e.now()
-	routeAtEvent := hasDefaultRoute(e.routePath) // stato della rotta all'istante dell'evento
+	routeAtEvent := hasDefaultRoute(e.routePath) // route state at the instant of the event
 	logf("START version=%s route_at_event=%v", version, routeAtEvent)
 
 	cfg, err := loadConfig(e.dir)
@@ -167,15 +167,15 @@ func run(e env) bool {
 		return false
 	}
 
-	// Blocco contro esecuzioni sovrapposte: un secondo evento mentre il primo lavora non fa nulla.
+	// Lock against overlapping runs: a second event while the first one is working does nothing.
 	lock, err := os.OpenFile(e.lockPath, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
-		logf("FAIL blocco: %v", err)
+		logf("FAIL lock: %v", err)
 		return false
 	}
 	defer lock.Close()
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		logf("SKIP un altro sync e' in corso")
+		logf("SKIP another sync is running")
 		return true
 	}
 
@@ -183,12 +183,12 @@ func run(e env) bool {
 	fp := tokenFP(cfg.Token)
 	st, reset := loadState(statePath, fp)
 	if reset {
-		logf("stato azzerato (token cambiato o stato illeggibile): reinvio completo")
+		logf("state reset (token changed or state unreadable): full resend")
 	}
 	if b := st.Blocked; b != nil {
 		if (b.Code == contract.CodeInvalidToken || b.Code == contract.CodeTokenRevoked) && b.TokenFP == fp ||
 			b.Code == contract.CodeSchemaUnsupported && b.AgentVersion == version {
-			logf("SKIP bloccato da %s: serve un nuovo config o una nuova versione dell'agente", b.Code)
+			logf("SKIP blocked by %s: needs a new config or a new agent version", b.Code)
 			return true
 		}
 		st.Blocked = nil
@@ -196,12 +196,12 @@ func run(e env) bool {
 	if st.LastOK > 0 {
 		gap := max(recentSkip, time.Duration(st.MinIntervalS)*time.Second)
 		if age := start.Sub(time.Unix(st.LastOK, 0)); age >= 0 && age < gap {
-			logf("SKIP ultimo sync riuscito %ds fa (minimo %ds)", int(age.Seconds()), int(gap.Seconds()))
+			logf("SKIP last successful sync %ds ago (minimum %ds)", int(age.Seconds()), int(gap.Seconds()))
 			return true
 		}
 	}
 
-	// Attesa della rotta: sostituisce il debounce fisso di 20 s della v0.1.
+	// Wait for the route: replaces the fixed 20 s debounce of v0.1.
 	var routeReady *int64
 	for {
 		if hasDefaultRoute(e.routePath) {
@@ -215,7 +215,7 @@ func run(e env) bool {
 		e.sleep(250 * time.Millisecond)
 	}
 	if routeReady == nil {
-		logf("FAIL nessuna rotta predefinita dopo %ds", int(e.routeWait.Seconds()))
+		logf("FAIL no default route after %ds", int(e.routeWait.Seconds()))
 		return false
 	}
 
@@ -224,7 +224,7 @@ func run(e env) bool {
 	attempts, err := copyStable(e.dbPath, tmp, e.sleep)
 	defer removeCopy(tmp)
 	if err != nil {
-		logf("FAIL copia database (tentativi=%d): %v", attempts, err)
+		logf("FAIL database copy (attempts=%d): %v", attempts, err)
 		return false
 	}
 	copyMS := e.now().Sub(t0).Milliseconds()
@@ -232,11 +232,11 @@ func run(e env) bool {
 	snap, err := readSnapshot(tmp)
 	removeCopy(tmp)
 	if err != nil {
-		logf("FAIL lettura database: %v", err)
+		logf("FAIL database read: %v", err)
 		return false
 	}
 	queryMS := e.now().Sub(t0).Milliseconds()
-	logf("letti annotations=%d words=%d books=%d copy_ms=%d copy_attempts=%d query_ms=%d warnings=%v",
+	logf("read annotations=%d words=%d books=%d copy_ms=%d copy_attempts=%d query_ms=%d warnings=%v",
 		len(snap.Items[contract.Annotations]), len(snap.Items[contract.Words]), len(snap.Items[contract.Books]),
 		copyMS, attempts, queryMS, snap.Warnings)
 
@@ -271,22 +271,22 @@ func run(e env) bool {
 			f.Code == contract.CodeSchemaUnsupported) {
 			st.Blocked = &blocked{Code: f.Code, TokenFP: fp, AgentVersion: version, At: e.now().Unix()}
 		}
-		saveState(st, statePath) // conserva le conferme dei lotti gia' accettati
-		logf("FAIL sync dopo %d lotti: %v sync_ms=%d wire_bytes=%d", res.Batches, err, syncMS, s.wire)
+		saveState(st, statePath) // keeps the acks of batches already accepted
+		logf("FAIL sync after %d batches: %v sync_ms=%d wire_bytes=%d", res.Batches, err, syncMS, s.wire)
 		return false
 	}
 	st.LastOK = e.now().Unix()
 	st.MinIntervalS = res.Resp.MinIntervalS
 	saveState(st, statePath)
 	if res.Missing > 0 {
-		logf("attenzione: %d record ancora mancanti per il server dopo %d giri", res.Missing, res.Rounds)
+		logf("warning: %d records still missing on the server after %d rounds", res.Missing, res.Rounds)
 	}
 	if la := res.Resp.LatestAgent; la != nil && *la != version {
-		logf("disponibile una nuova versione dell'agente: %s", *la)
+		logf("new agent version available: %s", *la)
 	}
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
-	logf("END ok sent=%d/%d/%d deleted=%d/%d/%d rejected=%d batches=%d rounds=%d sync_ms=%d wire_bytes=%d mem_sys_mb=%d totale_ms=%d",
+	logf("END ok sent=%d/%d/%d deleted=%d/%d/%d rejected=%d batches=%d rounds=%d sync_ms=%d wire_bytes=%d mem_sys_mb=%d total_ms=%d",
 		res.Sent[contract.Annotations], res.Sent[contract.Words], res.Sent[contract.Books],
 		res.Deleted[contract.Annotations], res.Deleted[contract.Words], res.Deleted[contract.Books],
 		res.Rejected, res.Batches, res.Rounds, syncMS, s.wire, ms.Sys>>20, e.now().Sub(start).Milliseconds())
@@ -295,6 +295,6 @@ func run(e env) bool {
 
 func saveState(st *state, path string) {
 	if err := st.save(path); err != nil {
-		logf("stato non salvato: %v", err)
+		logf("state not saved: %v", err)
 	}
 }

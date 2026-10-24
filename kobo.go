@@ -15,8 +15,8 @@ import (
 	"github.com/cannicombustiva/wrygloss-agent/internal/contract"
 )
 
-// columns e' la lista fissa di tabelle e colonne lette (spec, sezione 4). Nient'altro viene mai interrogato:
-// in particolare non la tabella user, non Bookmark.UserID e non content.___UserID.
+// columns is the fixed list of tables and columns that are read (spec, section 4). Nothing else is ever queried:
+// in particular not the user table, not Bookmark.UserID and not content.___UserID.
 var columns = map[string][]string{
 	"Bookmark": {"BookmarkID", "VolumeID", "ContentID", "Type", "Text", "Annotation", "StartContainerPath",
 		"EndContainerPath", "ChapterProgress", "Color", "Hidden", "DateCreated", "DateModified"},
@@ -24,7 +24,7 @@ var columns = map[string][]string{
 	"content":  {"ContentID", "ContentType", "Title", "Attribution", "Language", "ChapterIDBookmarked"},
 }
 
-// essential: senza queste colonne il tipo di record non viene letto ne' messo nel manifest (spec 4.4).
+// essential: without these columns the record kind is neither read nor put in the manifest (spec 4.4).
 var essential = map[string][]string{
 	"Bookmark": {"BookmarkID", "VolumeID"},
 	"WordList": {"Text"},
@@ -41,7 +41,7 @@ type item struct {
 
 type snapshot struct {
 	Items    map[contract.Kind][]item
-	Present  map[contract.Kind]bool // tipi letti: solo questi vanno nel manifest
+	Present  map[contract.Kind]bool // kinds that were read: only these go in the manifest
 	Warnings []string
 }
 
@@ -54,7 +54,7 @@ func (s *snapshot) warn(w string) {
 	s.Warnings = append(s.Warnings, w)
 }
 
-// add serializza il record una volta con h vuoto per l'impronta e una volta con h per l'invio.
+// add serializes the record once with an empty h for the fingerprint and once with h for sending.
 func (s *snapshot) add(k contract.Kind, id string, rec any, setH func(string)) {
 	b, err := json.Marshal(rec)
 	if err != nil {
@@ -118,7 +118,7 @@ func (s *dbSchema) usable(table string) bool {
 	return true
 }
 
-// col restituisce l'espressione SQL per una colonna della lista fissa, o NULL se manca.
+// col returns the SQL expression for a column of the fixed list, or NULL if it is missing.
 func (s *dbSchema) col(table, alias, name string) string {
 	if s.have[table][name] {
 		return alias + `."` + name + `"`
@@ -126,7 +126,7 @@ func (s *dbSchema) col(table, alias, name string) string {
 	return "NULL"
 }
 
-// readSnapshot legge la copia del database: tre query, una per tipo, piu' il titolo del capitolo per annotazione.
+// readSnapshot reads the database copy: three queries, one per kind, plus the chapter title per annotation.
 func readSnapshot(path string) (*snapshot, error) {
 	db, err := sql.Open("sqlite3", "file:"+path+"?mode=rw&_query_only=1")
 	if err != nil {
@@ -187,7 +187,7 @@ func readSnapshot(path string) (*snapshot, error) {
 		q := "SELECT " + strings.Join([]string{sch.col("WordList", "w", "Text"), sch.col("WordList", "w", "VolumeId"),
 			sch.col("WordList", "w", "DictSuffix"), sch.col("WordList", "w", "DateCreated")}, ", ") + " FROM WordList w"
 		err := scanRows(db, q, nil, 4, func(v []any) {
-			id := asID(v[0]) // stringa originale, punteggiatura compresa: la pulizia e' del server
+			id := asID(v[0]) // original string, punctuation included: cleaning is the server's job
 			if id == "" {
 				return
 			}
@@ -204,7 +204,7 @@ func readSnapshot(path string) (*snapshot, error) {
 	}
 
 	if sch.usable("content") {
-		// Solo i libri citati: la query filtra per id, cosi' il resto della libreria non viene nemmeno letto.
+		// Only cited books: the query filters by id, so the rest of the library is never even read.
 		ids := make([]any, 0, len(referenced))
 		for id := range referenced {
 			ids = append(ids, id)
@@ -273,7 +273,7 @@ func asStr(v any) *string {
 		s = strconv.FormatInt(x, 10)
 	case float64:
 		s = strconv.FormatFloat(x, 'g', -1, 64)
-	case time.Time: // il driver converte le colonne dichiarate DATE/DATETIME/TIMESTAMP
+	case time.Time: // the driver converts columns declared DATE/DATETIME/TIMESTAMP
 		s = x.Format("2006-01-02T15:04:05.000")
 	}
 	if s == "" {
@@ -320,7 +320,7 @@ func asInt(v any) *int64 {
 	return &i
 }
 
-// asBool normalizza Hidden, che il dispositivo puo' salvare come 0/1 o come testo "true"/"false".
+// asBool normalizes Hidden, which the device may store as 0/1 or as the text "true"/"false".
 func asBool(v any) *bool {
 	var b bool
 	switch x := v.(type) {
@@ -342,7 +342,7 @@ func asBool(v any) *bool {
 	return &b
 }
 
-// readDevice legge solo firmware e modello da .kobo/version. Il primo campo (numero di serie) viene scartato.
+// readDevice reads only firmware and model from .kobo/version. The first field (serial number) is discarded.
 func readDevice(path, arch string) contract.Device {
 	d := contract.Device{Arch: arch}
 	b, err := os.ReadFile(path)
@@ -377,9 +377,9 @@ func statDB(src string) [3]fileStat {
 	return out
 }
 
-// copyStable copia il database e i file accessori senza mai aprire l'originale. Se dimensione o data di modifica
-// di un file cambiano durante la copia (Nickel ha scritto), riprova: una copia incoerente puo' produrre un manifest
-// vecchio e quindi cancellazioni sbagliate. Lo -shm non si copia: SQLite lo ricostruisce dal WAL sulla copia.
+// copyStable copies the database and its sidecar files without ever opening the original. If the size or mtime of a
+// file changes during the copy (Nickel wrote), it retries: an inconsistent copy can produce a stale manifest and
+// therefore wrong deletions. The -shm is not copied: SQLite rebuilds it from the WAL on the copy.
 func copyStable(src, dst string, sleep func(time.Duration)) (attempts int, err error) {
 	for attempts = 1; attempts <= 3; attempts++ {
 		removeCopy(dst)
@@ -400,7 +400,7 @@ func copyStable(src, dst string, sleep func(time.Duration)) (attempts int, err e
 		sleep(500 * time.Millisecond)
 	}
 	removeCopy(dst)
-	return attempts - 1, fmt.Errorf("database modificato durante la copia")
+	return attempts - 1, fmt.Errorf("database modified during the copy")
 }
 
 func removeCopy(dst string) {

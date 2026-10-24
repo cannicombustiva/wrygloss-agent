@@ -1,183 +1,185 @@
 # Wrygloss ingest API v1 (`wrygloss.ingest/1`)
 
-Contratto tra l'agente sul dispositivo e il server di Wrygloss. Questa cartella e' la fonte di verita':
+Contract between the on-device agent and the Wrygloss server. This folder is the source of truth:
 
-| File | Contenuto |
+| File | Content |
 |---|---|
-| `README.md` | semantica normativa (questo file) |
-| `sync-request.schema.json` | JSON Schema 2020-12 del corpo della richiesta (struttura, tipi, campi ammessi) |
-| `sync-response.schema.json` | JSON Schema della risposta 200 |
-| `problem.schema.json` | JSON Schema delle risposte di errore |
-| `examples/valid/`, `examples/invalid/` | richieste di esempio: le valide devono passare lo schema, le non valide no |
-| `examples/word-cleaning.json` | vettori di prova per la pulizia delle parole |
+| `README.md` | normative semantics (this file) |
+| `sync-request.schema.json` | JSON Schema 2020-12 of the request body (structure, types, allowed fields) |
+| `sync-response.schema.json` | JSON Schema of the 200 response |
+| `problem.schema.json` | JSON Schema of error responses |
+| `examples/valid/`, `examples/invalid/` | example requests: valid ones must pass the schema, invalid ones must not |
+| `examples/word-cleaning.json` | test vectors for word cleaning |
 
-Le parole MUST, SHOULD e MAY hanno il significato della RFC 2119.
+The words MUST, SHOULD and MAY have the meaning given in RFC 2119.
 
-## 1. Principi
+## 1. Principles
 
-1. **L'agente invia dati grezzi.** Valori copiati cosi' come sono nel database del dispositivo, da una lista fissa di
-   tabelle e colonne (sezione 4). Pulizia, unione, interpretazione di posizioni e date si fanno sul server: correggere
-   il server costa un deploy, correggere l'agente costa una reinstallazione via USB su ogni dispositivo.
-2. **Nessun dato dell'account del dispositivo.** Il contratto non ha campi per la tabella `user`, per `UserID` o
-   `___UserID`, per i cookie, per `AnalyticsEvents` ne' per il numero di serie del dispositivo.
-3. **Idempotenza.** Ripetere una richiesta non cambia lo stato del server. Ogni riprovo e' sicuro.
-4. **Il server e' severo, l'agente e' tollerante.** Il server rifiuta i campi non previsti dalla versione dichiarata;
-   l'agente ignora i campi della risposta che non conosce.
+1. **The agent sends raw data.** Values copied as they are in the device database, from a fixed list of tables and
+   columns (section 4). Cleaning, merging, and interpreting positions and dates happen on the server: fixing the
+   server costs a deploy, fixing the agent costs a USB reinstall on every device.
+2. **No device account data.** The contract has no fields for the `user` table, `UserID` or `___UserID`, cookies,
+   `AnalyticsEvents`, or the device serial number.
+3. **Idempotency.** Repeating a request does not change the server state. Every retry is safe.
+4. **The server is strict, the agent is tolerant.** The server rejects fields not defined by the declared version;
+   the agent ignores response fields it does not know.
 
-## 2. Trasporto e autenticazione
+## 2. Transport and authentication
 
 ```
 POST {server_url}/api/ingest/v1/sync
-Authorization: Bearer wgd_<43 caratteri base64url>
+Authorization: Bearer wgd_<43 base64url characters>
 Content-Type: application/json
-Content-Encoding: gzip            (MAY; se assente il corpo e' JSON non compresso)
-User-Agent: wrygloss-agent/<versione>
+Content-Encoding: gzip            (MAY; if absent the body is uncompressed JSON)
+User-Agent: wrygloss-agent/<version>
 ```
 
-- **Token di dispositivo.** `wgd_` seguito da 32 byte casuali in base64url senza padding. Il server genera il token al
-  pairing, lo mostra una sola volta (dentro il `config.json` da copiare sul dispositivo) e ne conserva solo lo SHA-256.
-- **Ambito.** Il token permette solo di scrivere l'ingest del proprio dispositivo. Non permette di leggere nulla.
-- **Revoca.** Il server marca il dispositivo come revocato; ogni richiesta successiva riceve `401 token_revoked`.
-- **Nuovo pairing.** Un nuovo token e' un nuovo dispositivo per il server: l'agente MUST azzerare il proprio stato
-  confermato quando il token cambia e reinviare tutto.
-- Solo HTTPS in produzione. L'agente verifica il certificato con radici incorporate (il dispositivo non ne ha).
+- **Device token.** `wgd_` followed by 32 random bytes in base64url without padding. The server generates the token
+  at pairing, shows it only once (inside the `config.json` to copy onto the device) and stores only its SHA-256.
+- **Scope.** The token only allows writing the ingest of its own device. It does not allow reading anything.
+- **Revocation.** The server marks the device as revoked; every later request gets `401 token_revoked`.
+- **New pairing.** A new token is a new device for the server: the agent MUST reset its acked state when the token
+  changes and resend everything.
+- HTTPS only in production. The agent verifies the certificate with embedded roots (the device has none).
 
-## 3. Richiesta
+## 3. Request
 
-Esempio completo in `examples/valid/full-sync.json`. Struttura:
+Full example in `examples/valid/full-sync.json`. Structure:
 
-| Campo | Tipo | Note |
+| Field | Type | Notes |
 |---|---|---|
-| `schema` | string | versione del contratto usata dall'agente, `"1.0"` |
-| `run` | object | metadati dell'esecuzione (3.1) |
+| `schema` | string | contract version used by the agent, `"1.0"` |
+| `run` | object | run metadata (3.1) |
 | `device` | object | `firmware`, `model_id`, `arch` (3.2) |
-| `upserts` | object | `annotations`, `words`, `books`: array di record nuovi o cambiati (sezione 4) |
-| `manifest` | object | solo nell'ultimo lotto (`run.final = true`), obbligatorio li': insieme completo di id e `h` (5) |
+| `upserts` | object | `annotations`, `words`, `books`: arrays of new or changed records (section 4) |
+| `manifest` | object | only in the last batch (`run.final = true`), required there: full set of ids and `h` (5) |
 
 ### 3.1 `run`
 
-| Campo | Tipo | Note |
+| Field | Type | Notes |
 |---|---|---|
-| `id` | string | identificativo dell'esecuzione, uguale in tutti i lotti e riprovi della stessa esecuzione; solo per i log |
+| `id` | string | run identifier, the same in every batch and retry of the same run; for logs only |
 | `agent_version` | string | semver |
-| `started_at` | string | istante di avvio dell'agente, RFC 3339 UTC (`...Z`) |
-| `route_at_event` | boolean | rotta predefinita presente all'avvio dell'agente |
-| `route_ready_ms` | integer o null | millisecondi dall'avvio alla rotta pronta; `null` se la rotta non e' arrivata |
-| `attempt` | integer | numero del tentativo HTTP per questo lotto, da 1 |
-| `batch` | integer | numero del lotto nell'esecuzione, da 1 |
-| `final` | boolean | ultimo lotto: porta il `manifest` |
-| `warnings` | array di string | es. `missing_column:Bookmark.Color`, `oversize:annotations`; formato `codice[:dettaglio]` |
+| `started_at` | string | instant the agent started, RFC 3339 UTC (`...Z`) |
+| `route_at_event` | boolean | default route present when the agent started |
+| `route_ready_ms` | integer or null | milliseconds from start to route ready; `null` if the route never came up |
+| `attempt` | integer | HTTP attempt number for this batch, from 1 |
+| `batch` | integer | batch number within the run, from 1 |
+| `final` | boolean | last batch: carries the `manifest` |
+| `warnings` | array of string | e.g. `missing_column:Bookmark.Color`, `oversize:annotations`; format `code[:detail]` |
 
 ### 3.2 `device`
 
-| Campo | Fonte | Note |
+| Field | Source | Notes |
 |---|---|---|
-| `firmware` | `.kobo/version`, terzo campo | es. `4.46.23836`; `null` se illeggibile |
-| `model_id` | `.kobo/version`, sesto campo | identificativo del modello, uguale per tutti i dispositivi dello stesso modello |
-| `arch` | runtime | es. `arm` |
+| `firmware` | `.kobo/version`, third field | e.g. `4.46.23836`; `null` if unreadable |
+| `model_id` | `.kobo/version`, sixth field | model identifier, the same for every device of that model |
+| `arch` | runtime | e.g. `arm` |
 
-Il primo campo di `.kobo/version` e' il numero di serie: l'agente MUST NOT inviarlo.
+The first field of `.kobo/version` is the serial number: the agent MUST NOT send it.
 
-## 4. Record
+## 4. Records
 
-Ogni record ha `id` (chiave sul dispositivo) e `h` (impronta). Tutti gli altri campi sono sempre presenti e valgono
-`null` se la colonna e' assente o vuota nel database.
+Every record has `id` (key on the device) and `h` (fingerprint). All other fields are always present and are `null`
+if the column is missing or empty in the database.
 
-**`h`**: 16 caratteri esadecimali minuscoli, i primi 8 byte dello SHA-256 della serializzazione del record fatta
-dall'agente. Il server lo conserva cosi' com'e' e non lo ricalcola: serve solo a sapere se il record e' cambiato.
-Un agente MUST produrre lo stesso `h` per lo stesso contenuto tra un'esecuzione e l'altra.
+**`h`**: 16 lowercase hex characters, the first 8 bytes of the SHA-256 of the agent's serialization of the record.
+The server stores it as is and never recomputes it: it only tells whether the record changed. An agent MUST produce
+the same `h` for the same content from one run to the next.
 
-Le date sono stringhe grezze del dispositivo, con o senza `Z` (es. `2026-09-19T15:05:59.819` o
-`2026-09-19T15:05:59Z`): sono tutte UTC (verificato sul dispositivo, sezione 10) e il server le interpreta come tali.
+Dates are raw device strings, with or without `Z` (e.g. `2026-09-19T15:05:59.819` or `2026-09-19T15:05:59Z`): they
+are all UTC (verified on the device, section 10) and the server interprets them as such.
 
-### 4.1 `annotations` (tabella `Bookmark`)
+### 4.1 `annotations` (table `Bookmark`)
 
-| Campo | Colonna | Note |
+| Field | Column | Notes |
 |---|---|---|
-| `id` | `BookmarkID` | chiave unica (UUID e SyncTime sono vuoti sul dispositivo) |
-| `volume_id` | `VolumeID` | libro; per i libri caricati dall'utente e' il percorso del file |
-| `content_id` | `ContentID` | `<file>#(n)<percorso nell'EPUB>` |
-| `chapter_title` | `content.Title` della riga con `ContentID` uguale | `null` se non trovata |
-| `type` | `Type` | grezzo: `highlight`, `note`, `dogear`, altri valori futuri |
-| `text` | `Text` | testo evidenziato |
-| `annotation` | `Annotation` | nota dell'utente |
-| `start_path`, `end_path` | `StartContainerPath`, `EndContainerPath` | es. `OEBPS/c01.xhtml#point(/1/4/2/505:1)` |
-| `chapter_progress` | `ChapterProgress` | numero |
-| `color` | `Color` | intero |
-| `hidden` | `Hidden` | booleano (il dispositivo puo' salvarlo come `0/1` o `true/false`: l'agente normalizza) |
-| `created`, `modified` | `DateCreated`, `DateModified` | stringhe grezze |
+| `id` | `BookmarkID` | unique key (UUID and SyncTime are empty on the device) |
+| `volume_id` | `VolumeID` | book; for sideloaded books it is the file path |
+| `content_id` | `ContentID` | `<file>#(n)<path inside the EPUB>` |
+| `chapter_title` | `content.Title` of the row with the same `ContentID` | `null` if not found |
+| `type` | `Type` | raw: `highlight`, `note`, `dogear`, other future values |
+| `text` | `Text` | highlighted text |
+| `annotation` | `Annotation` | user note |
+| `start_path`, `end_path` | `StartContainerPath`, `EndContainerPath` | e.g. `OEBPS/c01.xhtml#point(/1/4/2/505:1)` |
+| `chapter_progress` | `ChapterProgress` | number |
+| `color` | `Color` | integer |
+| `hidden` | `Hidden` | boolean (the device may store it as `0/1` or `true/false`: the agent normalizes) |
+| `created`, `modified` | `DateCreated`, `DateModified` | raw strings |
 
-Colonne di `Bookmark` mai lette: `UserID`, `UUID`, `SyncTime`, `Published`, `Creator`, `ExtraAnnotationData`,
-`ContextString`, `Version`, offset e indici dei contenitori.
+`Bookmark` columns never read: `UserID`, `UUID`, `SyncTime`, `Published`, `Creator`, `ExtraAnnotationData`,
+`ContextString`, `Version`, container offsets and indexes.
 
-### 4.2 `words` (tabella `WordList`)
+### 4.2 `words` (table `WordList`)
 
-| Campo | Colonna | Note |
+| Field | Column | Notes |
 |---|---|---|
-| `id` | `Text` | **stringa originale**, punteggiatura compresa (es. `snazzy,`): e' la chiave sul dispositivo |
-| `volume_id` | `VolumeId` | libro in cui e' avvenuta la ricerca; si rompe se il file viene rinominato |
-| `dict_suffix` | `DictSuffix` | dizionario selezionato dall'utente (`-en`, `-es-en`...): non e' la lingua della parola |
-| `created` | `DateCreated` | stringa grezza |
+| `id` | `Text` | **original string**, punctuation included (e.g. `snazzy,`): it is the key on the device |
+| `volume_id` | `VolumeId` | book where the lookup happened; breaks if the file is renamed |
+| `dict_suffix` | `DictSuffix` | dictionary selected by the user (`-en`, `-es-en`...): not the language of the word |
+| `created` | `DateCreated` | raw string |
 
-### 4.3 `books` (tabella `content`, `ContentType = 6`)
+### 4.3 `books` (table `content`, `ContentType = 6`)
 
-Solo i libri **citati** da almeno un'annotazione o una parola inviata. Nessun altro titolo della libreria.
+Only books **cited** by at least one annotation or word sent. No other title from the library.
 
-| Campo | Colonna | Note |
+| Field | Column | Notes |
 |---|---|---|
-| `id` | `ContentID` | uguale al `volume_id` dei record che lo citano |
+| `id` | `ContentID` | equal to the `volume_id` of the records citing it |
 | `title` | `Title` | |
 | `author` | `Attribution` | |
-| `language` | `Language` | grezzo (`en`, `en-US`, `it`...) |
-| `position` | `ChapterIDBookmarked` | posizione di lettura corrente, grezza; il server ne conserva la storia per sync |
+| `language` | `Language` | raw (`en`, `en-US`, `it`...) |
+| `position` | `ChapterIDBookmarked` | current reading position, raw; the server keeps its history per sync |
 
-Colonne di `content` mai lette: `___UserID` e tutte quelle non elencate.
+`content` columns never read: `___UserID` and every column not listed.
 
-### 4.4 Colonne mancanti
+### 4.4 Missing columns
 
-L'agente controlla le colonne presenti prima di leggere. Se manca una colonna facoltativa invia `null` e aggiunge
-l'avviso `missing_column:<Tabella>.<Colonna>`. Se manca una colonna essenziale (`Bookmark.BookmarkID`,
-`Bookmark.VolumeID`, `WordList.Text`, `content.ContentID`, `content.ContentType`) o la tabella intera, non invia quel
-tipo di record, aggiunge `missing_table:<Tabella>` o `missing_column:...` e **omette quel tipo dal manifest** (5.2),
-cosi' il server non lo interpreta come una cancellazione totale.
+The agent checks which columns exist before reading. If an optional column is missing it sends `null` and adds the
+warning `missing_column:<Table>.<Column>`. If an essential column (`Bookmark.BookmarkID`, `Bookmark.VolumeID`,
+`WordList.Text`, `content.ContentID`, `content.ContentType`) or the whole table is missing, it does not send that
+record kind, adds `missing_table:<Table>` or `missing_column:...` and **omits that kind from the manifest** (5.2), so
+the server does not read it as a total deletion.
 
-## 5. Semantica del sync
+## 5. Sync semantics
 
-### 5.1 Incrementale con conferma
+### 5.1 Incremental with acknowledgement
 
-L'agente conserva lo stato confermato: per ogni tipo, la mappa `id -> h` dell'ultima risposta 200. A ogni esecuzione:
+The agent keeps the acked state: for each kind, the `id -> h` map from the last 200 response. On every run it:
 
-1. legge tutti i record e ne calcola `h`;
-2. mette in `upserts` solo i record con `h` diverso dallo stato confermato (o assenti da esso);
-3. divide gli `upserts` in lotti (limiti in 7); l'ultimo lotto ha `run.final = true` e porta il `manifest` completo;
-4. dopo ogni 200 aggiorna lo stato confermato con i record del lotto, compresi quelli in `rejected`;
-5. se la risposta finale contiene `missing`, invia quei record in un nuovo giro (al massimo 2 giri in piu');
-6. alla fine lo stato confermato contiene solo gli id del manifest.
+1. reads all records and computes their `h`;
+2. puts in `upserts` only the records whose `h` differs from the acked state (or that are absent from it);
+3. splits the `upserts` into batches (limits in 7); the last batch has `run.final = true` and carries the full
+   `manifest`;
+4. after every 200 updates the acked state with the batch's records, including those in `rejected`;
+5. if the final response contains `missing`, sends those records in a new round (at most 2 extra rounds);
+6. at the end the acked state holds only the ids of the manifest.
 
-Un lotto con `final = false` MUST NOT contenere `manifest`; il server applica solo gli `upserts`.
+A batch with `final = false` MUST NOT contain `manifest`; the server applies only the `upserts`.
 
-### 5.2 Manifest, cancellazioni e `missing`
+### 5.2 Manifest, deletions and `missing`
 
-`manifest` ha una chiave per tipo; ogni chiave e' un oggetto `{ id: h }` con **tutti** i record presenti sul
-dispositivo, inviati o no in questa esecuzione. Un tipo omesso dal manifest non viene toccato (4.4).
+`manifest` has one key per kind; each key is an object `{ id: h }` with **all** the records present on the device,
+whether or not they were sent in this run. A kind omitted from the manifest is left untouched (4.4).
 
-Il server, dopo aver applicato gli `upserts` dello stesso lotto, per ogni tipo presente nel manifest:
+After applying the `upserts` of the same batch, for each kind present in the manifest the server applies:
 
-- **cancellazione**: record vivo sul server e assente dal manifest -> `deleted_at = now` (soft delete);
-- **ripristino**: record cancellato sul server, presente nel manifest con lo stesso `h` -> `deleted_at = null`;
-- **`missing`**: id del manifest sconosciuto al server, o con `h` diverso da quello salvato -> elencato in `missing`.
+- **deletion**: record live on the server and absent from the manifest -> `deleted_at = now` (soft delete);
+- **restore**: record deleted on the server, present in the manifest with the same `h` -> `deleted_at = null`;
+- **`missing`**: manifest id unknown to the server, or with an `h` different from the stored one -> listed in
+  `missing`.
 
-I record rifiutati (6.2) contano come noti con il loro `h`: non finiscono in `missing`.
+Rejected records (6.2) count as known with their `h`: they do not end up in `missing`.
 
-Il soft delete rende reversibile anche un manifest sbagliato (copia del database incoerente, token rubato). Cosa
-succede alle carte di studio di un record cancellato lo decide l'app, non il contratto.
+Soft delete makes even a wrong manifest reversible (inconsistent database copy, stolen token). What happens to the
+study cards of a deleted record is up to the app, not the contract.
 
-### 5.3 Ordine e concorrenza
+### 5.3 Ordering and concurrency
 
-Le richieste di uno stesso dispositivo arrivano in sequenza (l'agente ha un blocco). Il server SHOULD comunque
-serializzarle per dispositivo.
+Requests from the same device arrive in sequence (the agent holds a lock). The server SHOULD serialize them per
+device anyway.
 
-## 6. Risposte
+## 6. Responses
 
 ### 6.1 `200 OK`
 
@@ -193,120 +195,122 @@ serializzarle per dispositivo.
 }
 ```
 
-- `missing` e `deleted` sono vuoti/zero nei lotti non finali.
-- `min_interval_s`: intervallo minimo in secondi che l'agente SHOULD rispettare tra due sync riusciti. Permette di
-  regolare la frequenza senza aggiornare gli agenti.
-- `latest_agent`: ultima versione pubblicata, per un avviso nel log e nell'app.
+- `missing` and `deleted` are empty/zero in non-final batches.
+- `min_interval_s`: minimum interval in seconds the agent SHOULD keep between two successful syncs. It lets the
+  server tune the frequency without updating agents.
+- `latest_agent`: latest published version, for a notice in the log and in the app.
 
-### 6.2 Rifiuti per record
+### 6.2 Per-record rejections
 
-Un valore fuori limite rifiuta **solo quel record**, non la richiesta: altrimenti un record anomalo bloccherebbe ogni
-sync futuro. Il server salva `id`, `h` e il codice del rifiuto senza il contenuto, cosi' l'app puo' mostrarlo.
+A value out of limits rejects **only that record**, not the request: otherwise one anomalous record would block every
+future sync. The server stores `id`, `h` and the rejection code without the content, so the app can show it.
 
-| `code` | Quando |
+| `code` | When |
 |---|---|
-| `id_too_long` | `id` oltre 512 caratteri |
-| `field_too_long` | un campo di testo oltre 32 768 caratteri (code point Unicode) |
-| `invalid_value` | valore non interpretabile (es. `chapter_progress` non finito) |
+| `id_too_long` | `id` over 512 characters |
+| `field_too_long` | a text field over 32 768 characters (Unicode code points) |
+| `invalid_value` | value that cannot be interpreted (e.g. non-finite `chapter_progress`) |
 
-### 6.3 Errori
+### 6.3 Errors
 
-Corpo `application/problem+json` (RFC 9457) con estensione `code` stabile; l'agente decide solo in base a `code`.
+Body `application/problem+json` (RFC 9457) with a stable `code` extension; the agent decides only on `code`.
 
 ```json
 { "type": "urn:wrygloss:problem:schema_violation", "title": "Schema violation", "status": 422,
-  "code": "schema_violation", "errors": [{ "pointer": "/upserts/words/0/lemma", "message": "campo non ammesso" }] }
+  "code": "schema_violation", "errors": [{ "pointer": "/upserts/words/0/lemma", "message": "field not allowed" }] }
 ```
 
-| Status | `code` | Significato | Comportamento dell'agente |
+| Status | `code` | Meaning | Agent behaviour |
 |---|---|---|---|
-| 400 | `malformed_json` | corpo non e' JSON | log, nessun riprovo |
-| 400 | `bad_encoding` | gzip non valido | log, nessun riprovo |
-| 401 | `invalid_token` | token assente o sconosciuto | si blocca finche' il token nel config non cambia |
-| 401 | `token_revoked` | dispositivo revocato | come sopra |
-| 405 | `method_not_allowed` | metodo diverso da POST | log |
-| 410 | `schema_unsupported` | versione del contratto non piu' (o non ancora) accettata | si blocca finche' la versione dell'agente non cambia |
-| 413 | `payload_too_large` | oltre i limiti di 7 | riduce i lotti e riprova una volta |
-| 415 | `unsupported_media_type` | `Content-Type` o `Content-Encoding` non ammessi | log |
-| 422 | `schema_violation` | struttura non conforme allo schema della versione dichiarata | log, nessun riprovo |
-| 429 | `rate_limited` | oltre i limiti di frequenza; intestazione `Retry-After` in secondi | riprova dopo l'attesa, se rientra nel tempo massimo |
-| 5xx | `internal` (o nessun corpo) | errore del server | riprova con attese crescenti |
+| 400 | `malformed_json` | body is not JSON | log, no retry |
+| 400 | `bad_encoding` | invalid gzip | log, no retry |
+| 401 | `invalid_token` | token missing or unknown | blocks until the token in the config changes |
+| 401 | `token_revoked` | device revoked | as above |
+| 405 | `method_not_allowed` | method other than POST | log |
+| 410 | `schema_unsupported` | contract version no longer (or not yet) accepted | blocks until the agent version changes |
+| 413 | `payload_too_large` | over the limits in 7 | shrinks the batches and retries once |
+| 415 | `unsupported_media_type` | `Content-Type` or `Content-Encoding` not allowed | log |
+| 422 | `schema_violation` | structure does not conform to the schema of the declared version | log, no retry |
+| 429 | `rate_limited` | over the rate limits; `Retry-After` header in seconds | retries after the wait, if it fits in the time budget |
+| 5xx | `internal` (or no body) | server error | retries with growing waits |
 
-Errori di rete e 5xx: riprovi con attese di 1, 2, 4, 8, 16 s (jitter +/-20%), al massimo circa 60 s per esecuzione.
-Il prossimo evento wifi riparte comunque da capo.
+Network errors and 5xx: at most 6 attempts, with waits of 1, 2, 4, 8, 16 s (jitter +/-20%), about 30 s in total;
+never more than 60 s per run, including `Retry-After` waits. The next wifi event starts over anyway.
 
-## 7. Limiti
+## 7. Limits
 
-| Limite | Valore | Violazione |
+| Limit | Value | Violation |
 |---|---|---|
-| Corpo compresso (sul filo) | 1 MiB | 413 |
-| Corpo decompresso | 8 MiB (decompressione a flusso con tetto) | 413 |
-| Record in `upserts` per richiesta (somma dei tipi) | 1000 | 422 |
-| Id per tipo nel `manifest` | 50 000 | 422 |
-| `id` | 512 caratteri | rifiuto del record |
-| Campi di testo | 32 768 caratteri | rifiuto del record |
-| Richieste per dispositivo | 60 all'ora, picco 10 | 429 |
+| Compressed body (on the wire) | 1 MiB | 413 |
+| Decompressed body | 8 MiB (streaming decompression with a cap) | 413 |
+| Records in `upserts` per request (all kinds) | 1000 | 422 |
+| Ids per kind in the `manifest` | 50 000 | 422 |
+| `id` | 512 characters | record rejected |
+| Text fields | 32 768 characters | record rejected |
+| Requests per device | 60 per hour, burst 10 | 429 |
 
-L'agente SHOULD tenere ogni lotto sotto 2 MiB non compressi e non inviare record oltre 256 KiB serializzati (avviso
-`oversize:<tipo>`).
+The agent SHOULD keep each batch under 2 MiB uncompressed and not send records over 256 KiB serialized (warning
+`oversize:<kind>`).
 
-## 8. Evoluzione dello schema
+## 8. Schema evolution
 
-- `schema` nel corpo e' `"1.<minore>"`. Una versione minore aggiunge **solo** campi facoltativi o nuovi valori ammessi.
-- Il server accetta ogni versione minore che conosce e valida la richiesta contro lo schema **di quella versione**:
-  un campo non previsto dalla versione dichiarata e' un 422. Un agente MUST NOT inviare campi di versioni successive
-  a quella che dichiara.
-- Una versione minore sconosciuta al server riceve 410. Per evitarlo il server viene sempre rilasciato **prima**
-  degli agenti che usano la nuova versione.
-- Rinominare o rimuovere un campo, o cambiarne il significato, richiede `/api/ingest/v2/`. Il server serve v1 e v2 in
-  parallelo a lungo: gli agenti si aggiornano solo con un'installazione via USB.
-- La risposta puo' guadagnare campi in qualsiasi versione minore; l'agente li ignora.
+- `schema` in the body is `"1.<minor>"`. A minor version adds **only** optional fields or new allowed values.
+- The server accepts every minor version it knows and validates the request against the schema **of that version**:
+  a field not defined by the declared version is a 422. An agent MUST NOT send fields from versions later than the
+  one it declares.
+- A minor version unknown to the server gets 410. To avoid it, the server is always released **before** the agents
+  that use the new version.
+- Renaming or removing a field, or changing its meaning, requires `/api/ingest/v2/`. The server serves v1 and v2 side
+  by side for a long time: agents are only updated through a USB install.
+- The response may gain fields in any minor version; the agent ignores them.
 
-## 9. Pulizia e unione delle parole (lato server)
+## 9. Word cleaning and merging (server side)
 
-Normativa per il server; l'agente non la applica. Vettori di prova in `examples/word-cleaning.json`.
+Normative for the server; the agent does not apply it. Test vectors in `examples/word-cleaning.json`.
 
-1. `nfc` = normalizzazione Unicode NFC di `id`.
-2. `clean` = `nfc` senza i caratteri delle categorie Unicode `P*`, `S*`, `Z*`, `Cc`, `Cf` **solo all'inizio e alla
-   fine**. Segni interni (apostrofi, trattini) e maiuscole restano.
-3. Se `clean` e' vuoto, la parola e' `unusable`: resta visibile all'utente, non viene scartata in silenzio.
-4. `key` = minuscolo di `clean` con le regole Unicode predefinite, senza lingua (in JavaScript `toLowerCase()`).
-5. Le voci con la stessa coppia `(key, dict_suffix)` dello stesso utente formano una sola parola, con data piu'
-   vecchia (`min(created)`) e tutti gli id originali come alias. Forma mostrata: `clean` della voce piu' vecchia.
-6. Una parola unita e' cancellata solo quando lo sono tutte le sue voci.
-7. Il server salva `clean` e `key` all'ingest insieme a un `cleaning_version`; se le regole cambiano, ricalcola
-   partendo dagli id originali, che conserva.
+1. `nfc` = Unicode NFC normalization of `id`.
+2. `clean` = `nfc` without characters of the Unicode categories `P*`, `S*`, `Z*`, `Cc`, `Cf` **only at the start and
+   the end**. Inner marks (apostrophes, hyphens) and capitals stay.
+3. If `clean` is empty, the word is `unusable`: it stays visible to the user, it is not silently dropped.
+4. `key` = lowercase of `clean` with the default Unicode rules, without a language (in JavaScript `toLowerCase()`).
+5. Entries of the same user with the same `(key, dict_suffix)` pair form a single word, with the oldest date
+   (`min(created)`) and all original ids as aliases. Displayed form: the `clean` of the oldest entry.
+6. A merged word is deleted only when all of its entries are.
+7. The server stores `clean` and `key` at ingest together with a `cleaning_version`; if the rules change, it
+   recomputes them from the original ids, which it keeps.
 
-In JavaScript i passi 1-4 sono `const clean = raw.normalize("NFC").replace(/^[\p{P}\p{S}\p{Z}\p{Cc}\p{Cf}]+|[\p{P}\p{S}\p{Z}\p{Cc}\p{Cf}]+$/gu, ""); const key = clean.toLowerCase();`
-(verificato contro i vettori, come l'implementazione Go di riferimento in `internal/ingestref/words.go`).
+In JavaScript steps 1-4 are `const clean = raw.normalize("NFC").replace(/^[\p{P}\p{S}\p{Z}\p{Cc}\p{Cf}]+|[\p{P}\p{S}\p{Z}\p{Cc}\p{Cf}]+$/gu, ""); const key = clean.toLowerCase();`
+(verified against the vectors, like the Go reference implementation in `internal/ingestref/words.go`).
 
-Limiti noti: un apostrofo iniziale si perde (`'tis` -> `tis`), come quello del genitivo plurale (`students'`).
+Known limits: a leading apostrophe is lost (`'tis` -> `tis`), as is the one of the plural genitive (`students'`).
 
-## 10. Note da verificare sul dispositivo
+## 10. Device observations
 
-Osservato sul Clara BW, firmware 4.46.23836, primo sync reale del 24 ottobre 2026 (32 annotazioni, 62 parole, 2 libri;
-tutte le richieste valide per lo schema):
+Observed on the Clara BW, firmware 4.46.23836, first real sync on October 24, 2026 (32 annotations, 62 words,
+2 books; every request valid against the schema):
 
-- Date: `Bookmark.DateCreated` senza fuso e con millisecondi (`2026-10-24T08:00:00.123`), `Bookmark.DateModified` e
-  `WordList.DateCreated` con `Z` e senza millisecondi (`2026-10-24T08:00:00Z`). Per tutte le 32 annotazioni
-  `modified - created = 0`: le due forme usano lo stesso orologio. Confermato con l'ora reale di un'evidenziazione:
-  tutte le date sono UTC, anche quelle senza `Z`. Il server MUST interpretarle come UTC.
-- `ChapterIDBookmarked`: percorso nell'EPUB senza prefisso `file://`, nella forma `OEBPS/....html#point(/1/4/2/505:1)`.
-- `chapter_title` trovato per tutte le annotazioni, dogear compresi: la corrispondenza tra `Bookmark.ContentID` e le
-  righe dei capitoli in `content` funziona.
-- `Type`: solo `highlight` (22), `note` (2), `dogear` (8). `Hidden`: sempre falso. I dogear hanno `text` nullo e
-  `start_path` uguale a un `ContentID` (`file:///...epub#(n)...`), non un `point(...)`.
-- `WordList.VolumeId` puo' citare un libro assente da `content` (file rinominato: 3 parole su 62): il server deve
-  accettare parole senza libro.
-- `WordList` contiene solo le parole aggiunte con "Add to My Words", non tutte le ricerche nel dizionario.
-- Un'evidenziazione appena creata viene riscritta da Nickel poco dopo: `created` perde i millisecondi
-  (`.393` -> `.000`), `modified` passa da `null` alla data di creazione, `chapter_progress` viene arrotondato a 6
-  decimali. Lo stesso record arriva quindi due volte con `h` diverso; il server MUST trattarlo come un normale
-  aggiornamento e non come una modifica dell'utente.
-- Cancellare un'evidenziazione sul dispositivo elimina la riga di `Bookmark` (non imposta `Hidden`): l'id sparisce dal
-  manifest e il server la marca come cancellata.
+- Dates: `Bookmark.DateCreated` without a timezone and with milliseconds (`2026-10-24T08:00:00.123`),
+  `Bookmark.DateModified` and `WordList.DateCreated` with `Z` and without milliseconds (`2026-10-24T08:00:00Z`). For
+  all 32 annotations `modified - created = 0`: both forms use the same clock. Confirmed against the real time of a
+  highlight: all dates are UTC, including those without `Z`. The server MUST interpret them as UTC.
+- `ChapterIDBookmarked`: path inside the EPUB without the `file://` prefix, in the form
+  `OEBPS/....html#point(/1/4/2/505:1)`.
+- `chapter_title` found for every annotation, dogears included: matching `Bookmark.ContentID` to the chapter rows in
+  `content` works.
+- `Type`: only `highlight` (22), `note` (2), `dogear` (8). `Hidden`: always false. Dogears have a null `text` and a
+  `start_path` equal to a `ContentID` (`file:///...epub#(n)...`), not a `point(...)`.
+- `WordList.VolumeId` can cite a book absent from `content` (renamed file: 3 words out of 62): the server must accept
+  words without a book.
+- `WordList` holds only the words added with "Add to My Words", not every dictionary lookup.
+- A newly created highlight is rewritten by Nickel shortly afterwards: `created` loses its milliseconds
+  (`.393` -> `.000`), `modified` goes from `null` to the creation date, `chapter_progress` is rounded to 6 decimals.
+  The same record therefore arrives twice with a different `h`; the server MUST treat it as a normal update, not as a
+  user edit.
+- Deleting a highlight on the device removes the `Bookmark` row (it does not set `Hidden`): the id disappears from
+  the manifest and the server marks it as deleted.
 
-Ancora da verificare:
+Still to verify:
 
-- Se la stessa stringa cercata con due dizionari sovrascrive `DictSuffix` (`Text` e' chiave primaria di `WordList`).
-- Valori di `Hidden` e di `Type` diversi da quelli osservati (altri firmware, evidenziazioni nascoste).
+- Whether the same string saved with two dictionaries overwrites `DictSuffix` (`Text` is the primary key of
+  `WordList`).
+- `Hidden` and `Type` values other than those observed (other firmware, hidden highlights).

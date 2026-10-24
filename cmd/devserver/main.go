@@ -1,6 +1,6 @@
-// devserver e' il server di ingest di riferimento, in memoria, per provare l'agente sul dispositivo in rete locale.
-// Valida ogni richiesta contro lo schema della specifica e stampa un riepilogo (conteggi, mai testi).
-// Uso: go run ./cmd/devserver -addr :8765 -config-out /tmp/config.json
+// devserver is the in-memory reference ingest server, for testing the agent on the device over the local network.
+// It validates every request against the spec's schema and prints a summary (counts, never texts).
+// Usage: go run ./cmd/devserver -addr :8765 -config-out /tmp/config.json
 package main
 
 import (
@@ -19,13 +19,13 @@ import (
 )
 
 func main() {
-	addr := flag.String("addr", ":8765", "indirizzo di ascolto")
-	token := flag.String("token", "", "token del dispositivo (vuoto: ne genera uno)")
-	host := flag.String("host", "", "IP o nome del computer visto dal dispositivo (vuoto: primo IPv4 non locale)")
-	out := flag.String("config-out", "", "se impostato, scrive qui il config.json per il dispositivo")
-	minInterval := flag.Int("min-interval", 0, "min_interval_s restituito all'agente")
-	dump := flag.String("dump", "", "se impostato, aggiunge qui ogni richiesta accettata (una riga JSON ciascuna), "+
-		"per controllare i formati reali dei dati; contiene i tuoi testi, resta sul tuo computer")
+	addr := flag.String("addr", ":8765", "listen address")
+	token := flag.String("token", "", "device token (empty: generate one)")
+	host := flag.String("host", "", "IP or name of this computer as seen by the device (empty: first private IPv4)")
+	out := flag.String("config-out", "", "if set, write the device config.json here")
+	minInterval := flag.Int("min-interval", 0, "min_interval_s returned to the agent")
+	dump := flag.String("dump", "", "if set, append every accepted request here (one JSON line each), "+
+		"to check the real data formats; it contains your texts, keep it on your computer")
 	flag.Parse()
 
 	if *token == "" {
@@ -52,9 +52,9 @@ func main() {
 		if err := os.WriteFile(*out, append(cfg, '\n'), 0600); err != nil {
 			log.Fatal(err)
 		}
-		fmt.Printf("config.json scritto in %s\n", *out)
+		fmt.Printf("config.json written to %s\n", *out)
 	}
-	fmt.Printf("config.json per il dispositivo:\n%s\n\nIn ascolto su %s, endpoint %s\n", cfg, *addr, contract.SyncPath)
+	fmt.Printf("config.json for the device:\n%s\n\nListening on %s, endpoint %s\n", cfg, *addr, contract.SyncPath)
 
 	var handler http.Handler = srv
 	if *dump != "" {
@@ -75,7 +75,7 @@ func main() {
 	}
 	http.Handle(contract.SyncPath, handler)
 	http.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
-		// Conteggi dei record vivi, per controllare a colpo d'occhio dopo un sync.
+		// Counts of live records, for a quick check after a sync.
 		json.NewEncoder(w).Encode(map[string]int{
 			"annotations": dev.Live(contract.Annotations), "words": dev.Live(contract.Words),
 			"books": dev.Live(contract.Books), "requests": len(dev.Requests),
@@ -91,5 +91,5 @@ func lanIP() string {
 			return n.IP.String()
 		}
 	}
-	return "IP_DEL_COMPUTER"
+	return "COMPUTER_IP"
 }

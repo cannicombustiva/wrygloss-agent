@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:wrygloss:ingest:v1:sync-response:1.0",
   "title": "Wrygloss ingest v1.0: sync response (200)",
-  "description": "Il server MUST produrre risposte conformi; l'agente ignora i campi che non conosce.",
+  "description": "The server MUST produce conforming responses; the agent ignores fields it does not know.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "server_time", "missing", "rejected", "deleted", "min_interval_s", "latest_agent"],
