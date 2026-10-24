@@ -1,0 +1,7 @@
+{
+  "schema": "1.0",
+  "run": { "id": "r-2", "agent_version": "0.2.0", "started_at": "2026-10-24T18:00:00Z", "route_at_event": false, "route_ready_ms": null, "attempt": 1, "batch": 1, "final": true, "warnings": [] },
+  "device": { "firmware": "4.46.23836", "model_id": "00000000-0000-0000-0000-000000000391", "arch": "arm" },
+  "upserts": { "annotations": [], "words": [], "books": [] },
+  "manifest": { "annotations": {}, "words": { "snazzy,": "a1b2c3d4e5f60718" }, "books": {} }
+}

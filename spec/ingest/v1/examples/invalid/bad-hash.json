@@ -1,0 +1,1 @@
+{"schema":"1.0","run":{"id":"r","agent_version":"0.2.0","started_at":"2026-10-24T18:00:00Z","route_at_event":false,"route_ready_ms":null,"attempt":1,"batch":1,"final":true,"warnings":[]},"device":{"firmware":null,"model_id":null,"arch":"arm"},"upserts":{"annotations":[],"words":[],"books":[]},"manifest":{"words":{"snazzy,":"A1B2"}}}

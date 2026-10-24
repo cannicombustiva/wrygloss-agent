@@ -1,0 +1,7 @@
+{
+  "schema": "1.0",
+  "run": { "id": "r-3", "agent_version": "0.2.0", "started_at": "2026-10-24T18:00:00Z", "route_at_event": false, "route_ready_ms": 900, "attempt": 1, "batch": 1, "final": true, "warnings": ["missing_table:WordList"] },
+  "device": { "firmware": "5.0.1", "model_id": null, "arch": "arm" },
+  "upserts": { "annotations": [], "words": [], "books": [] },
+  "manifest": { "annotations": {}, "books": {} }
+}

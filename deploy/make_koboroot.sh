@@ -1,8 +1,16 @@
 #!/bin/sh
-# Crea KoboRoot.tgz con la sola regola udev (nessuna directory nell'archivio, proprietario root).
+# Crea build/KoboRoot.tgz con la sola regola udev (proprietario root, nessun file accessorio di macOS).
 set -eu
-cd "$(dirname "$0")"
-mkdir -p /tmp/wg-root/etc/udev/rules.d
-cp 91-wrygloss-test.rules /tmp/wg-root/etc/udev/rules.d/
-tar --owner=0 --group=0 --numeric-owner -czf KoboRoot.tgz -C /tmp/wg-root etc/udev/rules.d/91-wrygloss-test.rules
-tar tzvf KoboRoot.tgz
+HERE="$(cd "$(dirname "$0")" && pwd)"
+OUT="$HERE/../build/KoboRoot.tgz"
+mkdir -p "$HERE/../build"
+ROOT="$(mktemp -d)"
+trap 'rm -rf "$ROOT"' EXIT
+mkdir -p "$ROOT/etc/udev/rules.d"
+cp "$HERE/91-wrygloss.rules" "$ROOT/etc/udev/rules.d/"
+if tar --version 2>/dev/null | grep -q bsdtar; then
+  COPYFILE_DISABLE=1 tar --uid 0 --gid 0 --numeric-owner --no-xattrs -czf "$OUT" -C "$ROOT" etc/udev/rules.d/91-wrygloss.rules
+else
+  tar --owner=0 --group=0 --numeric-owner -czf "$OUT" -C "$ROOT" etc/udev/rules.d/91-wrygloss.rules
+fi
+tar tzvf "$OUT"

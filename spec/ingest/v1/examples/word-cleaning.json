@@ -1,0 +1,22 @@
+{
+  "description": "Vettori per la sezione 9 della specifica. 'clean' e 'key' attesi per ogni 'raw'; clean vuoto = unusable.",
+  "cases": [
+    { "raw": "snazzy,", "clean": "snazzy", "key": "snazzy" },
+    { "raw": "Snazzy", "clean": "Snazzy", "key": "snazzy" },
+    { "raw": "snazzy", "clean": "snazzy", "key": "snazzy" },
+    { "raw": "\"Well-known;\"", "clean": "Well-known", "key": "well-known" },
+    { "raw": "don't.", "clean": "don't", "key": "don't" },
+    { "raw": "rock'n'roll!", "clean": "rock'n'roll", "key": "rock'n'roll" },
+    { "raw": "«ciao»", "clean": "ciao", "key": "ciao" },
+    { "raw": "¿Cuánto?", "clean": "Cuánto", "key": "cuánto" },
+    { "raw": "Cuánto", "clean": "Cuánto", "key": "cuánto" },
+    { "raw": "  tab\t", "clean": "tab", "key": "tab" },
+    { "raw": "­soft​", "clean": "soft", "key": "soft" },
+    { "raw": "(e.g.)", "clean": "e.g", "key": "e.g" },
+    { "raw": "$100", "clean": "100", "key": "100" },
+    { "raw": "students'", "clean": "students", "key": "students" },
+    { "raw": "ΟΔΟΣ", "clean": "ΟΔΟΣ", "key": "οδος" },
+    { "raw": "—", "clean": "", "key": "" },
+    { "raw": "...", "clean": "", "key": "" }
+  ]
+}

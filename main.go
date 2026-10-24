@@ -1,49 +1,58 @@
-// Wrygloss test agent: legge SOLO i conteggi di Bookmark e WordList da una copia di
-// KoboReader.sqlite, verifica rete e TLS, e (se configurato) invia i conteggi a un endpoint di prova.
-// Non legge testi, titoli o la tabella "user".
+// Wrygloss agent v0.2: a ogni attivazione del wifi legge da una copia di KoboReader.sqlite una lista fissa di
+// colonne (evidenziazioni, note, dogear, parole cercate, libri citati) e le sincronizza con il server di Wrygloss
+// secondo il contratto in spec/ingest/v1. Non legge mai la tabella user ne' gli id dell'account.
 package main
 
 import (
-	"bytes"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
-	"database/sql"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
-	"net"
+	mrand "math/rand/v2"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/cannicombustiva/wrygloss-agent/internal/contract"
 	_ "github.com/mattn/go-sqlite3"
 )
 
 //go:embed cacert.pem
 var caPEM []byte
 
-const version = "0.1.0-test"
+const version = "0.2.0"
 
-const (
-	lastEventFile = "/tmp/wrygloss-last-event"
-	lockFile      = "/tmp/wrygloss.lock"
-)
+// recentSkip: un secondo evento wifi entro questo tempo da un sync riuscito non rifa' il lavoro (eventi doppi
+// a 11-16 s l'uno dall'altro, misurati sul Clara BW). Il server puo' alzarlo con min_interval_s.
+const recentSkip = 30 * time.Second
 
 type Config struct {
-	Endpoint           string `json:"endpoint"`
-	Token              string `json:"token"`
-	DBPath             string `json:"db_path"`
-	QuietSeconds       int    `json:"quiet_seconds"`
-	MinIntervalSeconds int    `json:"min_interval_seconds"`
-	RouteWaitSeconds   int    `json:"route_wait_seconds"`
-	TLSTestURL         string `json:"tls_test_url"`
+	ServerURL string `json:"server_url"`
+	Token     string `json:"token"`
+}
+
+// env raccoglie tutto cio' che dipende dal dispositivo, per poter provare run() su un computer qualsiasi.
+type env struct {
+	dir         string // config, stato, log
+	dbPath      string
+	versionPath string
+	routePath   string
+	tmpDir      string
+	lockPath    string
+	routeWait   time.Duration
+	retryBudget time.Duration
+	now         func() time.Time
+	sleep       func(time.Duration)
+	transport   http.RoundTripper // nil: transport con radici incorporate
 }
 
 var (
@@ -52,6 +61,9 @@ var (
 )
 
 func logf(format string, a ...any) {
+	if logPath == "" {
+		return
+	}
 	line := time.Now().Format("2006-01-02 15:04:05") + " " + prefix + " " + fmt.Sprintf(format, a...) + "\n"
 	if st, err := os.Stat(logPath); err == nil && st.Size() > 200000 {
 		_ = os.Rename(logPath, logPath+".old")
@@ -64,26 +76,67 @@ func logf(format string, a ...any) {
 	_, _ = f.WriteString(line)
 }
 
-func loadConfig(dir string) Config {
-	cfg := Config{
-		DBPath:           "/mnt/onboard/.kobo/KoboReader.sqlite",
-		QuietSeconds:     20,
-		RouteWaitSeconds: 60,
-		TLSTestURL:       "https://example.com",
+func main() {
+	e := env{
+		routePath:   "/proc/net/route",
+		tmpDir:      "/tmp",
+		routeWait:   45 * time.Second,
+		retryBudget: 60 * time.Second,
+		now:         time.Now,
+		sleep:       time.Sleep,
 	}
-	b, err := os.ReadFile(filepath.Join(dir, "config.json"))
-	if err != nil {
-		logf("config: %v (uso i valori predefiniti)", err)
-		return cfg
+	flag.StringVar(&e.dir, "dir", "/mnt/onboard/.adds/wrygloss", "cartella di lavoro (config, stato, log)")
+	flag.StringVar(&e.dbPath, "db", "/mnt/onboard/.kobo/KoboReader.sqlite", "database del dispositivo")
+	flag.StringVar(&e.routePath, "route-file", e.routePath, "tabella delle rotte (per i test)")
+	flag.StringVar(&e.tmpDir, "tmp", e.tmpDir, "cartella per la copia del database e il blocco")
+	showVersion := flag.Bool("version", false, "stampa la versione ed esce")
+	flag.Parse()
+	if *showVersion {
+		fmt.Println(version)
+		return
 	}
-	if err := json.Unmarshal(b, &cfg); err != nil {
-		logf("config: JSON non valido: %v (uso i valori predefiniti)", err)
+	e.versionPath = filepath.Join(filepath.Dir(e.dbPath), "version")
+	e.lockPath = filepath.Join(e.tmpDir, "wrygloss.lock")
+	logPath = filepath.Join(e.dir, "agent.log")
+	prefix = fmt.Sprintf("[%d]", os.Getpid())
+	if !run(e) {
+		os.Exit(1)
 	}
-	return cfg
 }
 
-func hasDefaultRoute() bool {
-	b, err := os.ReadFile("/proc/net/route")
+func loadConfig(dir string) (Config, error) {
+	var cfg Config
+	b, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	if err != nil {
+		return cfg, err
+	}
+	var keys map[string]any
+	if err := json.Unmarshal(b, &keys); err != nil {
+		return cfg, fmt.Errorf("JSON non valido: %w", err)
+	}
+	for k := range keys {
+		if k != "server_url" && k != "token" {
+			logf("config: chiave sconosciuta %q ignorata", k)
+		}
+	}
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		return cfg, fmt.Errorf("JSON non valido: %w", err)
+	}
+	u, err := url.Parse(cfg.ServerURL)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		return cfg, fmt.Errorf("server_url non valido")
+	}
+	if u.Scheme == "http" {
+		logf("config: server_url senza HTTPS (solo per prove in rete locale)")
+	}
+	if cfg.Token == "" {
+		return cfg, fmt.Errorf("token mancante")
+	}
+	return cfg, nil
+}
+
+func hasDefaultRoute(path string) bool {
+	b, err := os.ReadFile(path)
 	if err != nil {
 		return false
 	}
@@ -96,258 +149,152 @@ func hasDefaultRoute() bool {
 	return false
 }
 
-func waitRoute(maxSec int) bool {
-	deadline := time.Now().Add(time.Duration(maxSec) * time.Second)
-	for time.Now().Before(deadline) {
-		if hasDefaultRoute() {
+func newRunID(t time.Time) string {
+	b := make([]byte, 4)
+	_, _ = rand.Read(b)
+	return "r-" + t.UTC().Format("20060102T150405Z") + "-" + hex.EncodeToString(b)
+}
+
+// run esegue un sync completo e restituisce true se riuscito o saltato per un motivo normale.
+func run(e env) bool {
+	start := e.now()
+	routeAtEvent := hasDefaultRoute(e.routePath) // stato della rotta all'istante dell'evento
+	logf("START version=%s route_at_event=%v", version, routeAtEvent)
+
+	cfg, err := loadConfig(e.dir)
+	if err != nil {
+		logf("FAIL config: %v", err)
+		return false
+	}
+
+	// Blocco contro esecuzioni sovrapposte: un secondo evento mentre il primo lavora non fa nulla.
+	lock, err := os.OpenFile(e.lockPath, os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		logf("FAIL blocco: %v", err)
+		return false
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		logf("SKIP un altro sync e' in corso")
+		return true
+	}
+
+	statePath := filepath.Join(e.dir, "state.json")
+	fp := tokenFP(cfg.Token)
+	st, reset := loadState(statePath, fp)
+	if reset {
+		logf("stato azzerato (token cambiato o stato illeggibile): reinvio completo")
+	}
+	if b := st.Blocked; b != nil {
+		if (b.Code == contract.CodeInvalidToken || b.Code == contract.CodeTokenRevoked) && b.TokenFP == fp ||
+			b.Code == contract.CodeSchemaUnsupported && b.AgentVersion == version {
+			logf("SKIP bloccato da %s: serve un nuovo config o una nuova versione dell'agente", b.Code)
 			return true
 		}
-		time.Sleep(2 * time.Second)
+		st.Blocked = nil
 	}
-	return hasDefaultRoute()
-}
+	if st.LastOK > 0 {
+		gap := max(recentSkip, time.Duration(st.MinIntervalS)*time.Second)
+		if age := start.Sub(time.Unix(st.LastOK, 0)); age >= 0 && age < gap {
+			logf("SKIP ultimo sync riuscito %ds fa (minimo %ds)", int(age.Seconds()), int(gap.Seconds()))
+			return true
+		}
+	}
 
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
+	// Attesa della rotta: sostituisce il debounce fisso di 20 s della v0.1.
+	var routeReady *int64
+	for {
+		if hasDefaultRoute(e.routePath) {
+			ms := e.now().Sub(start).Milliseconds()
+			routeReady = &ms
+			break
+		}
+		if e.now().Sub(start) >= e.routeWait {
+			break
+		}
+		e.sleep(250 * time.Millisecond)
+	}
+	if routeReady == nil {
+		logf("FAIL nessuna rotta predefinita dopo %ds", int(e.routeWait.Seconds()))
+		return false
+	}
+
+	t0 := e.now()
+	tmp := filepath.Join(e.tmpDir, "wrygloss-copy.sqlite")
+	attempts, err := copyStable(e.dbPath, tmp, e.sleep)
+	defer removeCopy(tmp)
 	if err != nil {
-		return err
+		logf("FAIL copia database (tentativi=%d): %v", attempts, err)
+		return false
 	}
-	defer in.Close()
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return err
-	}
-	return out.Close()
-}
-
-// copyDB copia il database e gli eventuali file accessori. Il database originale non viene mai aperto.
-func copyDB(src, dst string) (sidecars []string, err error) {
-	if err = copyFile(src, dst); err != nil {
-		return nil, err
-	}
-	for _, suf := range []string{"-wal", "-shm", "-journal"} {
-		if _, e := os.Stat(src + suf); e == nil {
-			if e := copyFile(src+suf, dst+suf); e == nil {
-				sidecars = append(sidecars, suf)
-			}
-		}
-	}
-	return sidecars, nil
-}
-
-var required = map[string][]string{
-	"Bookmark": {"BookmarkID", "VolumeID", "ContentID", "StartContainerPath", "Text", "Annotation", "DateCreated", "Type", "Hidden"},
-	"WordList": {"Text", "VolumeId", "DictSuffix", "DateCreated"},
-}
-
-// readCounts interroga SOLO le tabelle Bookmark e WordList e restituisce numeri, mai contenuti.
-func readCounts(path string) (map[string]any, error) {
-	db, err := sql.Open("sqlite3", "file:"+path+"?mode=ro&_query_only=1")
-	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
-	out := map[string]any{}
-
-	byType := map[string]int{}
-	rows, err := db.Query(`SELECT COALESCE(Type,''), COUNT(*) FROM Bookmark GROUP BY 1`)
-	if err != nil {
-		return nil, fmt.Errorf("Bookmark: %w", err)
-	}
-	for rows.Next() {
-		var t string
-		var n int
-		if err := rows.Scan(&t, &n); err == nil {
-			byType[t] = n
-		}
-	}
-	rows.Close()
-	out["bookmark_by_type"] = byType
-
-	var words int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM WordList`).Scan(&words); err != nil {
-		return nil, fmt.Errorf("WordList: %w", err)
-	}
-	out["wordlist_rows"] = words
-
-	missing := []string{}
-	for table, cols := range required {
-		have := map[string]bool{}
-		r, err := db.Query(`SELECT name FROM pragma_table_info('` + table + `')`)
-		if err != nil {
-			return nil, err
-		}
-		for r.Next() {
-			var name string
-			if r.Scan(&name) == nil {
-				have[name] = true
-			}
-		}
-		r.Close()
-		for _, c := range cols {
-			if !have[c] {
-				missing = append(missing, table+"."+c)
-			}
-		}
-	}
-	out["missing_columns"] = missing
-
-	var qc string
-	if err := db.QueryRow(`PRAGMA quick_check(1)`).Scan(&qc); err == nil {
-		out["quick_check"] = qc
-	}
-	return out, nil
-}
-
-func tlsCheck(url string, roots *x509.CertPool) string {
-	t0 := time.Now()
-	client := &http.Client{
-		Timeout:   20 * time.Second,
-		Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots}},
-	}
-	resp, err := client.Get(url)
-	ms := time.Since(t0).Milliseconds()
-	if err != nil {
-		msg := err.Error()
-		if len(msg) > 120 {
-			msg = msg[:120]
-		}
-		return fmt.Sprintf("error=%q ms=%d", msg, ms)
-	}
-	resp.Body.Close()
-	return fmt.Sprintf("status=%d ms=%d", resp.StatusCode, ms)
-}
-
-func main() {
-	dir := flag.String("dir", "/mnt/onboard/.adds/wrygloss-test", "cartella di lavoro (config, log, stato)")
-	flag.Parse()
-	logPath = filepath.Join(*dir, "agent.log")
-	prefix = fmt.Sprintf("[%d]", os.Getpid())
-	start := time.Now()
-	cfg := loadConfig(*dir)
-	logf("START version=%s arch=%s", version, runtime.GOARCH)
-
-	// 1) Debounce: vince l'ultimo evento di una raffica.
-	stamp := strconv.FormatInt(time.Now().UnixNano(), 10)
-	_ = os.WriteFile(lastEventFile, []byte(stamp), 0644)
-	time.Sleep(time.Duration(cfg.QuietSeconds) * time.Second)
-	if b, _ := os.ReadFile(lastEventFile); strings.TrimSpace(string(b)) != stamp {
-		logf("SKIP superato da un evento piu' recente")
-		return
-	}
-
-	// 2) Blocco contro esecuzioni sovrapposte.
-	lock, err := os.OpenFile(lockFile, os.O_CREATE|os.O_RDWR, 0644)
-	if err == nil {
-		if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-			logf("SKIP un altro sync e' in corso")
-			return
-		}
-		defer lock.Close()
-	}
-
-	// 3) Intervallo minimo tra sync riusciti.
-	statePath := filepath.Join(*dir, "state.json")
-	if cfg.MinIntervalSeconds > 0 {
-		var st struct {
-			LastOK int64 `json:"last_ok"`
-		}
-		if b, err := os.ReadFile(statePath); err == nil && json.Unmarshal(b, &st) == nil {
-			if age := time.Now().Unix() - st.LastOK; age < int64(cfg.MinIntervalSeconds) {
-				logf("SKIP ultimo sync riuscito %ds fa (minimo %ds)", age, cfg.MinIntervalSeconds)
-				return
-			}
-		}
-	}
-
-	// 4) Attesa della rotta predefinita.
-	t0 := time.Now()
-	if !waitRoute(cfg.RouteWaitSeconds) {
-		logf("FAIL nessuna rotta predefinita dopo %ds", cfg.RouteWaitSeconds)
-		return
-	}
-	logf("route ok dopo %dms", time.Since(t0).Milliseconds())
-
-	pool := x509.NewCertPool()
-	pool.AppendCertsFromPEM(caPEM)
-	diag := map[string]any{"embedded_roots": bytes.Count(caPEM, []byte("BEGIN CERTIFICATE"))}
-
-	// 5) Rete: DNS e TLS (con certificati incorporati e con quelli di sistema, che sul Kobo mancano).
-	host := strings.TrimPrefix(strings.TrimPrefix(cfg.TLSTestURL, "https://"), "http://")
-	t0 = time.Now()
-	_, dnsErr := net.LookupHost(strings.Split(host, "/")[0])
-	diag["dns_ms"] = time.Since(t0).Milliseconds()
-	diag["dns_ok"] = dnsErr == nil
-	diag["tls_embedded"] = tlsCheck(cfg.TLSTestURL, pool)
-	diag["tls_system"] = tlsCheck(cfg.TLSTestURL, nil)
-	logf("dns_ok=%v dns_ms=%v tls_embedded=%v tls_system=%v", diag["dns_ok"], diag["dns_ms"], diag["tls_embedded"], diag["tls_system"])
-
-	// 6) Copia del database e lettura dei soli conteggi.
-	tmp := "/tmp/wrygloss-copy.sqlite"
-	t0 = time.Now()
-	sidecars, err := copyDB(cfg.DBPath, tmp)
-	diag["copy_ms"] = time.Since(t0).Milliseconds()
-	diag["sidecars"] = sidecars
-	if err != nil {
-		logf("FAIL copia database: %v", err)
-		return
-	}
-	defer func() {
-		os.Remove(tmp)
-		for _, s := range []string{"-wal", "-shm", "-journal"} {
-			os.Remove(tmp + s)
-		}
-	}()
-	t0 = time.Now()
-	counts, err := readCounts(tmp)
-	diag["query_ms"] = time.Since(t0).Milliseconds()
+	copyMS := e.now().Sub(t0).Milliseconds()
+	t0 = e.now()
+	snap, err := readSnapshot(tmp)
+	removeCopy(tmp)
 	if err != nil {
 		logf("FAIL lettura database: %v", err)
-		return
+		return false
 	}
-	logf("counts=%v copy_ms=%v query_ms=%v sidecars=%v", counts, diag["copy_ms"], diag["query_ms"], sidecars)
+	queryMS := e.now().Sub(t0).Milliseconds()
+	logf("letti annotations=%d words=%d books=%d copy_ms=%d copy_attempts=%d query_ms=%d warnings=%v",
+		len(snap.Items[contract.Annotations]), len(snap.Items[contract.Words]), len(snap.Items[contract.Books]),
+		copyMS, attempts, queryMS, snap.Warnings)
 
-	// 7) Invio all'endpoint di prova, se configurato.
-	postOK := true
-	if cfg.Endpoint != "" {
-		var ms runtime.MemStats
-		runtime.ReadMemStats(&ms)
-		diag["mem_sys_mb"] = ms.Sys / (1 << 20)
-		payload := map[string]any{
-			"agent_version": version,
-			"sent_at":       time.Now().UTC().Format(time.RFC3339),
-			"arch":          runtime.GOARCH,
-			"counts":        counts,
-			"diagnostics":   diag,
-		}
-		body, _ := json.Marshal(payload)
-		req, _ := http.NewRequest("POST", cfg.Endpoint, bytes.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		if cfg.Token != "" {
-			req.Header.Set("Authorization", "Bearer "+cfg.Token)
-		}
-		client := &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}}
-		t0 = time.Now()
-		resp, err := client.Do(req)
-		if err != nil {
-			postOK = false
-			logf("POST errore: %v", err)
-		} else {
-			resp.Body.Close()
-			postOK = resp.StatusCode/100 == 2
-			logf("POST status=%d bytes=%d ms=%d", resp.StatusCode, len(body), time.Since(t0).Milliseconds())
-		}
-	} else {
-		logf("nessun endpoint configurato: invio saltato")
+	transport := e.transport
+	if transport == nil {
+		pool := x509.NewCertPool()
+		pool.AppendCertsFromPEM(caPEM)
+		transport = &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}
 	}
+	s := &sender{
+		client:   &http.Client{Timeout: 20 * time.Second, Transport: transport},
+		url:      strings.TrimSuffix(cfg.ServerURL, "/") + contract.SyncPath,
+		token:    cfg.Token,
+		now:      e.now,
+		sleep:    e.sleep,
+		jitter:   func(d time.Duration) time.Duration { return time.Duration(float64(d) * (0.8 + 0.4*mrand.Float64())) },
+		deadline: e.now().Add(e.retryBudget),
+	}
+	base := contract.Request{
+		Schema: contract.Schema,
+		Run: contract.Run{
+			ID: newRunID(start), AgentVersion: version, StartedAt: start.UTC().Format("2006-01-02T15:04:05.000Z"),
+			RouteAtEvent: routeAtEvent, RouteReadyMS: routeReady,
+		},
+		Device: readDevice(e.versionPath, runtime.GOARCH),
+	}
+	t0 = e.now()
+	res, err := syncSnapshot(s, base, snap, st)
+	syncMS := e.now().Sub(t0).Milliseconds()
+	if err != nil {
+		if f, ok := err.(*failure); ok && (f.Code == contract.CodeInvalidToken || f.Code == contract.CodeTokenRevoked ||
+			f.Code == contract.CodeSchemaUnsupported) {
+			st.Blocked = &blocked{Code: f.Code, TokenFP: fp, AgentVersion: version, At: e.now().Unix()}
+		}
+		saveState(st, statePath) // conserva le conferme dei lotti gia' accettati
+		logf("FAIL sync dopo %d lotti: %v sync_ms=%d wire_bytes=%d", res.Batches, err, syncMS, s.wire)
+		return false
+	}
+	st.LastOK = e.now().Unix()
+	st.MinIntervalS = res.Resp.MinIntervalS
+	saveState(st, statePath)
+	if res.Missing > 0 {
+		logf("attenzione: %d record ancora mancanti per il server dopo %d giri", res.Missing, res.Rounds)
+	}
+	if la := res.Resp.LatestAgent; la != nil && *la != version {
+		logf("disponibile una nuova versione dell'agente: %s", *la)
+	}
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	logf("END ok sent=%d/%d/%d deleted=%d/%d/%d rejected=%d batches=%d rounds=%d sync_ms=%d wire_bytes=%d mem_sys_mb=%d totale_ms=%d",
+		res.Sent[contract.Annotations], res.Sent[contract.Words], res.Sent[contract.Books],
+		res.Deleted[contract.Annotations], res.Deleted[contract.Words], res.Deleted[contract.Books],
+		res.Rejected, res.Batches, res.Rounds, syncMS, s.wire, ms.Sys>>20, e.now().Sub(start).Milliseconds())
+	return true
+}
 
-	if postOK {
-		b, _ := json.Marshal(map[string]int64{"last_ok": time.Now().Unix()})
-		_ = os.WriteFile(statePath, b, 0644)
+func saveState(st *state, path string) {
+	if err := st.save(path); err != nil {
+		logf("stato non salvato: %v", err)
 	}
-	logf("END ok=%v totale_ms=%d", postOK, time.Since(start).Milliseconds())
 }

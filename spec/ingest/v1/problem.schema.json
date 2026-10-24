@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:wrygloss:ingest:v1:problem:1.0",
+  "title": "Wrygloss ingest v1.0: error (application/problem+json, RFC 9457)",
+  "type": "object",
+  "required": ["type", "title", "status", "code"],
+  "properties": {
+    "type": { "type": "string", "pattern": "^urn:wrygloss:problem:[a-z_]+$" },
+    "title": { "type": "string" },
+    "status": { "type": "integer", "minimum": 400, "maximum": 599 },
+    "code": {
+      "enum": ["malformed_json", "bad_encoding", "invalid_token", "token_revoked", "method_not_allowed", "schema_unsupported",
+               "payload_too_large", "unsupported_media_type", "schema_violation", "rate_limited", "internal"]
+    },
+    "detail": { "type": "string" },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["pointer", "message"],
+        "properties": { "pointer": { "type": "string" }, "message": { "type": "string" } }
+      }
+    }
+  }
+}

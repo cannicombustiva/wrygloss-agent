@@ -1,36 +1,26 @@
 #!/bin/sh
-# Installa il test Wrygloss sul Kobo montato. Uso: sh install.sh [/Volumes/KOBOeReader]
+# Installa l'agente su un Kobo montato via USB (macOS o Linux).
+# Uso: sh deploy/install.sh /percorso/config.json [/Volumes/KOBOeReader]
+# Scrive solo in .adds/wrygloss/ e .kobo/KoboRoot.tgz. Dopo l'espulsione sicura il Kobo si riavvia, installa la
+# regola udev e cancella KoboRoot.tgz. Ripetere l'installazione (es. dopo un aggiornamento del firmware) e' sicuro.
 set -eu
-KOBO="${1:-/Volumes/KOBOeReader}"
+CFG="${1:-}"
+KOBO="${2:-/Volumes/KOBOeReader}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
+B="$HERE/../build"
+[ -n "$CFG" ] && [ -f "$CFG" ] || { echo "Uso: sh deploy/install.sh /percorso/config.json [punto di montaggio del Kobo]"; exit 1; }
+grep -q '"server_url"' "$CFG" && grep -q '"token"' "$CFG" || { echo "$CFG non sembra un config.json di Wrygloss"; exit 1; }
 [ -d "$KOBO/.kobo" ] || { echo "Kobo non trovato in $KOBO (controlla con: ls /Volumes)"; exit 1; }
+[ -f "$B/wrygloss-agent" ] && [ -f "$B/VERSION" ] || { echo "manca build/wrygloss-agent: esegui ./build.sh"; exit 1; }
+sh "$HERE/make_koboroot.sh" >/dev/null
 
-IP="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true)"
-if [ -z "$IP" ]; then
-  echo "Non riesco a leggere l'IP del Mac: dopo l'installazione modifica 'endpoint' in .adds/wrygloss-test/config.json"
-  IP="IP_DEL_MAC"
-fi
-
-D="$KOBO/.adds/wrygloss-test"
+D="$KOBO/.adds/wrygloss"
 mkdir -p "$D"
-cp "$HERE/wrygloss-agent" "$HERE/run.sh" "$D/"
-if [ ! -f "$D/config.json" ]; then
-  cat > "$D/config.json" <<CFG
-{
-  "endpoint": "http://$IP:8765/ingest",
-  "token": "test-token",
-  "quiet_seconds": 20,
-  "min_interval_seconds": 0,
-  "route_wait_seconds": 60,
-  "tls_test_url": "https://example.com"
-}
-CFG
-fi
+cp "$B/wrygloss-agent" "$B/VERSION" "$HERE/run.sh" "$D/"
+cp "$CFG" "$D/config.json"
 rm -f "$D/UNINSTALL"
-
-# Disattiva la vecchia sonda (si rimuove da sola al prossimo evento di rete).
-[ -d "$KOBO/.adds/kobosync-probe" ] && touch "$KOBO/.adds/kobosync-probe/UNINSTALL" || true
-
-cp "$HERE/KoboRoot.tgz" "$KOBO/.kobo/KoboRoot.tgz"
+# La versione di prova, se presente, si disinstalla da sola al prossimo evento wifi.
+[ -d "$KOBO/.adds/wrygloss-test" ] && touch "$KOBO/.adds/wrygloss-test/UNINSTALL" || true
+cp "$B/KoboRoot.tgz" "$KOBO/.kobo/KoboRoot.tgz"
 command -v dot_clean >/dev/null 2>&1 && dot_clean -m "$KOBO/.kobo" "$KOBO/.adds" 2>/dev/null || true
-echo "Copiato (endpoint http://$IP:8765/ingest). Ora espelli il Kobo in modo sicuro: si riavviera' e installera' la regola."
+echo "Installato $(cat "$B/VERSION") in $D. Ora espelli il Kobo in modo sicuro: si riavviera' e installera' la regola."

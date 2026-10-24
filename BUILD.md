@@ -1,47 +1,57 @@
-# Come compilare l'agente per il Kobo (Clara BW, armv7l)
+# Compilare e provare l'agente
 
-L'agente e' un binario Go statico per Linux ARMv7 con SQLite incorporato (mattn/go-sqlite3, richiede CGO).
-Serve quindi un compilatore C che produca codice ARM con libc musl: uso `zig cc` come cross-compilatore.
+L'agente e' un binario Go statico per Linux ARMv7 con SQLite incorporato (mattn/go-sqlite3, richiede CGO): serve un
+compilatore C che produca codice ARM con libc musl. Si usa `zig cc`.
 
-## Verificato (Linux x86_64, Ubuntu 24.04, container senza accesso a proxy.golang.org)
+## Verificato: macOS (Apple Silicon), Go 1.27.3, zig 0.17.0
+
 ```sh
-apt-get install -y golang-go qemu-user git ca-certificates   # Go 1.22.2, qemu-arm per i test
-pip install --break-system-packages ziglang                  # fornisce 'python3 -m ziglang cc'
-
-export GOPROXY=direct GONOSUMDB='*' GOFLAGS=-mod=mod GOPRIVATE='github.com/*' GOTOOLCHAIN=local
-# (le variabili GOPROXY/GONOSUMDB servono solo se proxy.golang.org non e' raggiungibile)
-
-CGO_ENABLED=1 CC="$PWD/zigcc.sh" GOOS=linux GOARCH=arm GOARM=7 \
-  go build -trimpath -tags 'netgo osusergo sqlite_omit_load_extension' \
-  -ldflags '-s -w -extldflags "-static"' -o wrygloss-agent .
-```
-- Tempo di compilazione: circa 3 minuti la prima volta (quasi tutto e' la compilazione di SQLite), 56 s con la cache.
-- Ricompilato dal sorgente: stesso SHA-256 del binario provato sul Kobo (compilazione riproducibile):
-  dfbf8ac07e988e273cc0cb32b4d127f0006b6e5bbabf9eb222df1181aa2694f7
-- Risultato: ELF 32-bit ARM EABI5, linkato staticamente, circa 9,6 MB.
-- `file` segnala "not stripped" nonostante `-s -w`: probabilmente simboli C aggiunti dal linker di zig (da indagare).
-- `zigcc.sh` e' un wrapper di una riga: `exec python3 -m ziglang cc -target arm-linux-musleabihf "$@"`.
-
-## Non verificato: macOS
-Presumibilmente `brew install go zig`, poi lo stesso comando con `CC="zig cc -target arm-linux-musleabihf"`
-tramite un wrapper come zigcc.sh. Non l'ho provato. qemu-user non e' disponibile su macOS: i test dell'agente
-si fanno sul Kobo oppure in un container Linux.
-
-## Test senza Kobo (emulazione ARM in Linux, kernel di emulazione diverso da quello del Kobo)
-```sh
-python3 tools/make_test_db.py /tmp/wgtest/KoboReader.sqlite
-python3 tools/test_server.py 8765 &
-cat > /tmp/wgtest/config.json <<'CFG'
-{"endpoint":"http://127.0.0.1:8765/ingest","token":"test-token","db_path":"/tmp/wgtest/KoboReader.sqlite",
- "quiet_seconds":2,"min_interval_seconds":0,"route_wait_seconds":10,"tls_test_url":"https://github.com"}
-CFG
-qemu-arm ./wrygloss-agent --dir /tmp/wgtest && cat /tmp/wgtest/agent.log
+brew install go zig
+./build.sh            # build/wrygloss-agent e build/VERSION
 ```
 
-## Distribuzione sul Kobo (provata sul Clara BW, firmware 4.46)
-- `deploy/make_koboroot.sh` crea `KoboRoot.tgz` con la sola regola udev `91-wrygloss-test.rules`.
-- `deploy/install.sh` (macOS) copia agente, `run.sh` e `config.json` in `.adds/wrygloss-test/` e il `KoboRoot.tgz`
-  in `.kobo/`. Il Kobo, scollegato in modo sicuro, si riavvia, installa la regola e cancella il `KoboRoot.tgz`.
-- `deploy/run.sh` e' lanciato da udev a ogni attivazione di wlan0: copia il binario in /tmp (la partizione utente e' FAT)
-  e avvia l'agente in background.
-- Disinstallazione: file vuoto `UNINSTALL` in `.adds/wrygloss-test/` e riattivare il wifi.
+- Circa 1 minuto la prima volta (quasi tutto e' SQLite), pochi secondi con la cache.
+- Risultato: ELF 32-bit ARM EABI5, statico, stripped, circa 8,6 MB. Compilazione riproducibile: due build
+  successive producono lo stesso binario.
+- `build/VERSION` contiene versione e prime 12 cifre dello SHA-256 del binario: `run.sh` ricopia il binario in `/tmp`
+  quando cambia.
+- Su Linux vale lo stesso comando; `zigcc.sh` usa `zig` se installato, altrimenti `python3 -m ziglang`
+  (`pip install ziglang`). Il `go.mod` richiede Go 1.26 o successivo.
+
+## Test
+
+```sh
+go test -race ./...
+```
+
+- Logica dell'agente contro il server di riferimento in memoria (`internal/ingestref`), che valida ogni richiesta con
+  il JSON Schema della specifica: sync incrementale, cancellazioni e ripristini, perdita dei dati sul server, token
+  revocato, riprovi su 503, lotti, 413, tabelle e colonne mancanti, righe presenti solo nel WAL, evento doppio,
+  assenza di rotta, nessun valore canarino in payload, log e stato.
+- Esempi validi e non validi della specifica contro lo schema; vettori di pulizia delle parole.
+- Codici di errore del server di riferimento (401, 410, 413 compresa una gzip bomb, 415, 422, 429, rifiuto per record).
+
+## Prova del binario ARM in emulazione (Docker Desktop su Mac)
+
+Alpine `linux/arm/v7` ha musl e busybox come il Kobo; il kernel e' quello dell'emulazione, non il 4.9 del Kobo.
+
+```sh
+./build.sh && sh deploy/package.sh
+W=$(mktemp -d) && (cd "$W" && unzip -q "$OLDPWD/build/wrygloss-agent-0.2.0.zip")
+python3 tools/make_test_db.py "$W/.kobo/KoboReader.sqlite"
+go run ./cmd/devserver -addr 0.0.0.0:8799 -host host.docker.internal -config-out "$W/.adds/wrygloss/config.json" &
+docker run --rm --platform linux/arm/v7 -v "$W:/mnt/onboard" alpine:3.20 sh -c '
+  mkdir -p /etc/udev/rules.d && touch /etc/udev/rules.d/91-wrygloss.rules
+  sh /mnt/onboard/.adds/wrygloss/run.sh; sleep 8      # evento wifi
+  sh /mnt/onboard/.adds/wrygloss/run.sh; sleep 3      # evento doppio: SKIP
+  touch /mnt/onboard/.adds/wrygloss/UNINSTALL; sh /mnt/onboard/.adds/wrygloss/run.sh; ls /etc/udev/rules.d'
+cat "$W/.adds/wrygloss/agent.log"
+```
+
+Esito del 24 ottobre 2026: sync completo di 32 annotazioni, 62 parole e 2 libri in 193 ms, evento doppio saltato,
+disinstallazione che rimuove regola e binario. Con `/etc/ssl` cancellata, l'handshake TLS verso un sito pubblico
+riesce con le sole radici incorporate.
+
+## Prova sul dispositivo
+
+Vedi [KOBO-TEST.md](KOBO-TEST.md).
