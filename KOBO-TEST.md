@@ -16,7 +16,7 @@ What it verifies (it opens or closes the "to verify" items of the spec and the R
 | F | duration, memory, bytes sent | `END` line |
 | G | uninstalling the v0.1 test build and v0.2 | `UNINSTALL` lines |
 
-Result on October 24, 2026: steps 3-8 passed, see the README performance table and section 10 of the spec.
+Result on October 24, 2026: steps 3-9 passed, see the README performance table and section 10 of the spec.
 
 ## 1. On the Mac: build and start the test server
 
